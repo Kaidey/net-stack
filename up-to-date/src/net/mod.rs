@@ -1,4 +1,5 @@
 mod socket;
+mod com;
 use libc::{c_void, recv};
 
 pub fn test() {

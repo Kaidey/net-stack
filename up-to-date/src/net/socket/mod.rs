@@ -28,7 +28,6 @@ pub fn new_socket<T: Into<String>>(net_itf: Option<T>) -> i32 {
 fn interface_bind_packet_socket(sock_fd: i32, net_itf: CString) {
     // Get the index for interface with name net_itf
     let net_itf_idx = unsafe { if_nametoindex(net_itf.as_ptr()) };
-    println!("Index for interface {:?} is {net_itf_idx}", net_itf);
 
     // Create an instance of a data-link layer socket address
     let mut sock_addr: sockaddr_ll = unsafe { zeroed() };
