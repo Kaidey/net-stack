@@ -22,6 +22,16 @@ impl EthernetFrame {
             data: data,
         }
     }
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        bytes.extend_from_slice(&self.dest_mac_address);
+        bytes.extend_from_slice(&self.source_mac_address);
+        bytes.extend_from_slice(&self.type_or_length.to_be_bytes());
+        bytes.extend_from_slice(&self.data);
+
+        bytes
+    }
 }
 
 pub struct FrameType;

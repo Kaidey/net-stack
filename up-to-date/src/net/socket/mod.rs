@@ -66,27 +66,3 @@ fn interface_bind_packet_socket(sock_fd: i32, net_itf: CString) {
     }
 }
 
-// Only works with AF_INET sockets as per https://linux.die.net/man/7/socket
-fn interface_bind_ipv4_socket(sock_fd: i32, net_itf: CString) {
-    unsafe {
-        let bind_result = setsockopt(
-            sock_fd,
-            // Apply option at the socket level
-            SOL_SOCKET,
-            // Use option to bind socket to an ethernet interface
-            SO_BINDTODEVICE,
-            // Value of the option is a pointer of type void (any type) to the interface's name
-            net_itf.as_ptr() as *const libc::c_void,
-            // Linux kernel always copies a fixed amount of bytes for the interface name which is defined in the constant IFNAMSIZ (interface name size)
-            libc::IFNAMSIZ as libc::socklen_t,
-        );
-
-        if bind_result < 0 {
-            panic!(
-                "Failed to bind socket to interface {:?}: {}",
-                net_itf,
-                std::io::Error::last_os_error()
-            );
-        }
-    }
-}
