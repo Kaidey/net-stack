@@ -3,15 +3,16 @@ mod socket;
 
 use std::str::FromStr;
 
-use com::{ArpAddressTypes, ArpPacket, EthernetFrame};
+use com::ethernet_payloads::arp;
+use com::{AddressFamily, EthernetFrame};
 use libc::{c_void, recv, send};
 
 use crate::net::com::FrameType;
 
 pub fn test() {
-    let arp_packet = ArpPacket::new_arp_request_packet(
-        ArpAddressTypes::ETHERNET,
-        ArpAddressTypes::IPV4,
+    let arp_packet = arp::ArpPacket::new_request(
+        AddressFamily::MAC,
+        AddressFamily::IPV4,
         [0x94, 0xbb, 0x43, 0x4e, 0xce, 0xbc],
         [192, 168, 68, 101],
         [0, 0, 0, 0, 0, 0],
@@ -29,7 +30,7 @@ pub fn test() {
 
     let frame_as_bytes = eth_frame.to_bytes();
 
-    println!("\nSending Ethernet Frame {}\n", EthernetFrame::from(frame_as_bytes.clone()));
+    println!("\nSending Ethernet Frame {}", EthernetFrame::from(frame_as_bytes.clone()));
 
     let bytes_sent = unsafe {
         send(
