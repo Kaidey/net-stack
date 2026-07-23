@@ -15,9 +15,7 @@ pub fn new_socket<T: Into<String>>(net_itf: Option<T>) -> i32 {
             std::io::Error::last_os_error()
         );
     }
-    println!("Socket File Descriptor >> {sock_fd}");
 
-    println!("Binding socket to interface {itf}");
     let itf_as_cstring = CString::new(itf).unwrap();
 
     interface_bind_packet_socket(sock_fd, itf_as_cstring);
@@ -58,11 +56,5 @@ fn interface_bind_packet_socket(sock_fd: i32, net_itf: CString) {
             net_itf,
             std::io::Error::last_os_error()
         );
-    } else {
-        println!(
-            "Successfully bound socket {sock_fd} to interface {:?}",
-            net_itf
-        );
     }
 }
-

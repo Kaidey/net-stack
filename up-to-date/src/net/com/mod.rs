@@ -1,4 +1,5 @@
 use core::fmt;
+use std::{array, fmt::UpperHex, io::Error, str::FromStr, string::FromUtf8Error};
 
 pub struct EthernetFrame {
     dest_mac_address: [u8; 6],
@@ -34,10 +35,118 @@ impl EthernetFrame {
     }
 }
 
-pub struct FrameType;
+impl From<Vec<u8>> for EthernetFrame {
+    fn from(buffer: Vec<u8>) -> Self {
+        let mut eth_frame = EthernetFrame {
+            dest_mac_address: [0, 0, 0, 0, 0, 0],
+            source_mac_address: [0, 0, 0, 0, 0, 0],
+            // Adds (binary OR) bytes 12 and 13 from the buffer (2 bytes for frame
+            // type/length) in order to convert the separate bytes into a u16
+            // Example with frame type = ARP:
+            //      [08,06] -> 0806(u16)
+            type_or_length: ((buffer[12] as u16) << 8) | buffer[13] as u16,
+            data: buffer[14..].to_vec(),
+        };
+
+        eth_frame.dest_mac_address.copy_from_slice(&buffer[0..6]);
+        eth_frame.source_mac_address.copy_from_slice(&buffer[6..12]);
+
+        eth_frame
+    }
+}
+
+impl fmt::Display for EthernetFrame {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut dest_mac_disp_string: String = String::new();
+        let mut byte_counter: i32 = 0;
+        for byte in self.dest_mac_address.iter() {
+            fmt::write(&mut dest_mac_disp_string, format_args!("{:02X?}", byte));
+            if byte_counter != (self.dest_mac_address.len() - 1) as i32 {
+                fmt::write(&mut dest_mac_disp_string, format_args!("-"));
+            }
+            byte_counter += 1;
+        }
+
+        // write!(f, "\nDestination MAC: {dest_mac_disp_string}")
+
+        let mut src_mac_disp_string: String = String::new();
+        byte_counter = 0;
+        for byte in self.source_mac_address.iter() {
+            fmt::write(&mut src_mac_disp_string, format_args!("{:02X?}", byte));
+            if byte_counter != (self.dest_mac_address.len() - 1) as i32 {
+                fmt::write(&mut src_mac_disp_string, format_args!("-"));
+            }
+            byte_counter += 1;
+        }
+
+        let mut serialized_data: Option<PacketType> = None;
+
+        for frame_type in FrameType::variations_as_vec().iter() {
+            if frame_type.hex_value() == self.type_or_length {
+                serialized_data = FrameType::serialize_payload(frame_type, self.data.clone())//frame_type.serialize_payload(self.data.clone());
+            }
+        }
+
+        write!(
+            f,
+            "\nDestination MAC: {dest_mac_disp_string}\nSource MAC: {src_mac_disp_string}\nFrame Type/Length: {:04X?} ({}),\nPayload: {}",
+            self.type_or_length,
+            FrameType::name_from_u16(self.type_or_length),
+            serialized_data.unwrap()
+        )
+    }
+}
+pub enum PacketType {
+    Arp(ArpPacket),
+    IPv4(IPv4Packet),
+    IPv6(IPv6Packet)
+}
+#[repr(u16)]
+#[derive(PartialEq, Eq, Copy)]
+pub enum FrameType {
+    Arp = 0x0806,
+    IPv4 = 0x0800,
+    IPv6 = 0x86DD,
+}
 
 impl FrameType {
-    pub const ARP: u16 = 0x0806;
+    pub fn name_from_u16(value: u16) -> &'static str {
+        match value {
+            0x0806 => "ARP",
+            0x0800 => "IPv4",
+            0x86DD => "IPv6",
+            _ => "Unknown",
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            FrameType::Arp => "ARP",
+            FrameType::IPv4 => "IPv4",
+            FrameType::IPv6 => "IPv6",
+        }
+    }
+
+    pub fn hex_value(self) -> u16 {
+        self as u16
+    }
+    pub fn variations_as_vec() -> Vec<FrameType> {
+        vec![FrameType::Arp, FrameType::IPv4, FrameType::IPv6]
+    }
+
+    pub fn serialize_payload(&self, bytes: Vec<u8>) -> Option<PacketType> {
+        match self {
+            FrameType::Arp => Some(PacketType::Arp(bytes.into())),
+            // FrameType::IPv4 => Some(PacketType::IPv4(bytes.into())),
+            // FrameType::IPv6 => Some(PacketType::IPv6(bytes.into())),
+            _ => None
+        }
+    }
+}
+
+impl Clone for FrameType {
+    fn clone(&self) -> Self{
+        self.to_owned()
+    }
 }
 
 pub struct Address {
@@ -49,20 +158,24 @@ pub struct ArpAddressTypes;
 
 impl ArpAddressTypes {
     pub const ETHERNET: Address = Address {
-        addr_type: 1,
-        addr_len: 6,
+        addr_type: 0x0001,
+        addr_len: 0x06,
     };
     pub const IPV4: Address = Address {
-        addr_type: 2048,
-        addr_len: 4,
+        addr_type: 0x0800,
+        addr_len: 0x04,
     };
 }
-
-struct ArpOperations;
+#[repr(u16)]
+pub enum ArpOperations {
+    Request = 0x0001,
+    Reply = 0x0002,
+}
 
 impl ArpOperations {
-    pub const REQUEST: u16 = 1;
-    pub const REPLY: u16 = 2;
+    pub fn hex_value(self) -> u16 {
+        self as u16
+    }
 }
 
 pub struct ArpPacket {
@@ -92,7 +205,7 @@ impl ArpPacket {
             proto_addr_type: proto_addr.addr_type,
             hardware_addr_len: hardware_addr.addr_len,
             proto_addr_len: proto_addr.addr_len,
-            op: ArpOperations::REQUEST,
+            op: ArpOperations::Request.hex_value(),
             src_hardware_addr: src_hardware_addr,
             src_proto_addr: src_proto_addr,
             dest_hardware_addr: dest_hardware_addr,
@@ -132,7 +245,19 @@ impl ArpPacket {
         }
     }
 }
-
+impl From<Vec<u8>> for ArpPacket {
+    // TEMP
+    fn from(buffer: Vec<u8>) -> Self {
+        ArpPacket::new_arp_request_packet(
+            ArpAddressTypes::ETHERNET,
+            ArpAddressTypes::IPV4,
+            [0x94, 0xbb, 0x43, 0x4e, 0xce, 0xbc],
+            [192, 168, 68, 101],
+            [0, 0, 0, 0, 0, 0],
+            [192, 168, 68, 100],
+        )
+    }
+}
 impl fmt::Display for ArpPacket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for byte in self.to_bytes() {
@@ -141,3 +266,6 @@ impl fmt::Display for ArpPacket {
         Ok(())
     }
 }
+
+pub struct IPv4Packet {}
+pub struct IPv6Packet {}
