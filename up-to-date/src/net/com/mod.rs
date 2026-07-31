@@ -1,8 +1,11 @@
 use core::fmt;
 use std::{array, fmt::UpperHex, io::Error, str::FromStr, string::FromUtf8Error};
+use libc::{c_void, recv, send};
 
 pub mod ethernet_payloads;
 use ethernet_payloads::{arp, ipv4, ipv6};
+
+use crate::net::com::ethernet_payloads::arp::ArpPacket;
 
 pub struct EthernetFrame {
     dest_mac_address: [u8; 6],
@@ -68,8 +71,14 @@ impl fmt::Display for EthernetFrame {
             }
         }
 
-        println!("\nDestination MAC: {}", AddressFamily::to_string(&AddressFamily::MAC, self.dest_mac_address.to_vec()));
-        println!("Source MAC: {}", AddressFamily::to_string(&AddressFamily::MAC, self.src_mac_address.to_vec()));
+        println!(
+            "\nDestination MAC: {}",
+            AddressFamily::to_string(&AddressFamily::MAC, self.dest_mac_address.to_vec())
+        );
+        println!(
+            "Source MAC: {}",
+            AddressFamily::to_string(&AddressFamily::MAC, self.src_mac_address.to_vec())
+        );
         println!(
             "Frame Type/Length: {:04X?} ({})",
             self.type_or_length,
@@ -145,10 +154,7 @@ pub struct AddressFamily {
 }
 
 impl AddressFamily {
-    pub const MAC: Self = Self { 
-        family: 1, 
-        len: 6, 
-    };
+    pub const MAC: Self = Self { family: 1, len: 6 };
     pub const IPV4: Self = Self {
         family: 2048,
         len: 4,
@@ -162,17 +168,93 @@ impl AddressFamily {
     }
     fn to_string(&self, bytes: Vec<u8>) -> String {
         match self.family {
-            family if family == AddressFamily::MAC.family => bytes.iter().map(|byte| format!("{:02X?}", byte)).collect::<Vec<_>>().join("-"),
-            family if family == AddressFamily::IPV4.family => bytes.iter().map(|byte| format!("{:#}", byte)).collect::<Vec<_>>().join("."), 
-            _ => String::from("Unknown Address Family")
+            family if family == AddressFamily::MAC.family => bytes
+                .iter()
+                .map(|byte| format!("{:02X?}", byte))
+                .collect::<Vec<_>>()
+                .join("-"),
+            family if family == AddressFamily::IPV4.family => bytes
+                .iter()
+                .map(|byte| format!("{:#}", byte))
+                .collect::<Vec<_>>()
+                .join("."),
+            _ => String::from("Unknown Address Family"),
         }
     }
     fn from_family(family: u16) -> Option<Self> {
         match family {
-           family if family == AddressFamily::MAC.family => Some(AddressFamily::MAC),
-           family if family == AddressFamily::IPV4.family => Some(AddressFamily::IPV4),
-           _ => None
+            family if family == AddressFamily::MAC.family => Some(AddressFamily::MAC),
+            family if family == AddressFamily::IPV4.family => Some(AddressFamily::IPV4),
+            _ => None,
         }
     }
 }
 
+pub fn run_arp(socket_fd: i32, src_mac: [u8; 6], src_ip: [u8; 4], dest_ip: [u8; 4]) -> Option<[u8; 6]> {
+    let arp_packet = arp::ArpPacket::new_request(
+        AddressFamily::MAC,
+        AddressFamily::IPV4,
+        src_mac,
+        src_ip,
+        [0, 0, 0, 0, 0, 0],
+        dest_ip,
+    );
+
+    let eth_frame = EthernetFrame::new(
+        [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+        src_mac,
+        FrameType::Arp.hex_value(),
+        arp_packet.to_bytes(),
+    );
+
+    let frame_as_bytes: Vec<u8> = eth_frame.to_bytes();
+
+    let bytes_sent = unsafe {
+        send(
+            socket_fd,
+            frame_as_bytes.as_ptr() as *const _,
+            frame_as_bytes.len(),
+            0,
+        )
+    };
+
+    if bytes_sent < 0 {
+        println!(
+            "Failed to send ARP request: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    // Since new_socket() is a generic, we need to tell the compiler what type None should be
+    // treated as. The function expects any type that implements Into<String>, so we tell the comp
+    // to treat None as a String
+
+    let mut buffer = [0u8; 65536];
+
+    let mut dest_mac: Option<[u8; 6]> = None;
+
+    // Make sure to only capture replies to my request (op = reply, dest_mac = input src_marc,
+    // dest_ip = input src_ip, src_ip = input dest_ip
+    //
+    // Handle reply not being received
+    // threads?
+    // loop has to go
+    // Retries with limit wait time?
+    loop {
+        let frame_size =
+            unsafe { recv(socket_fd, buffer.as_mut_ptr() as *mut c_void, buffer.len(), 0) };
+
+        if frame_size < 0 {
+            panic!("Error receiving frame: {}", std::io::Error::last_os_error());
+        }
+
+        let frame: EthernetFrame = EthernetFrame::from(buffer.to_vec());
+        let is_arp: ArpPacket = ArpPacket::from(frame.data);
+
+        if is_arp.op == 0x0002 && is_arp.dest_hardware_addr == src_mac{
+            dest_mac = Some(is_arp.src_hardware_addr);
+            break;
+        }
+    }
+
+    dest_mac
+}

@@ -4,11 +4,11 @@ use core::fmt;
 pub struct ArpPacket {
     hardware_addr: AddressFamily,
     proto_addr: AddressFamily,
-    op: u16,
-    src_hardware_addr: [u8; 6],
-    src_proto_addr: [u8; 4],
-    dest_hardware_addr: [u8; 6],
-    dest_proto_addr: [u8; 4],
+    pub op: u16,
+    pub src_hardware_addr: [u8; 6],
+    pub src_proto_addr: [u8; 4],
+    pub dest_hardware_addr: [u8; 6],
+    pub dest_proto_addr: [u8; 4],
     padding: Vec<u8>,
 }
 
@@ -53,10 +53,6 @@ impl ArpPacket {
     }
     fn add_padding(&mut self) {
         let mut packet_as_bytes = self.to_bytes();
-        // println!(
-        //     "Padding Arp packet. Starting size: {}",
-        //     packet_as_bytes.len()
-        // );
 
         while packet_as_bytes.len() < 40 {
             self.padding.push(0);
