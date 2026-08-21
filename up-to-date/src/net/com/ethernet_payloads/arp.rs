@@ -63,6 +63,8 @@ impl ArpPacket {
 impl From<Vec<u8>> for ArpPacket {
     fn from(buffer: Vec<u8>) -> Self {
         let mut packet = Self {
+            // Combines the first 2 u8 of buffer into a u16 by casting the first u8 to u16 and then
+            // shifting it 8 bits left. Finally, performs an OR with the second u8
             hardware_addr: AddressFamily::from_family(((buffer[0] as u16) << 8) | buffer[1] as u16).unwrap(), 
             proto_addr: AddressFamily::from_family(((buffer[2] as u16) << 8) | buffer[3] as u16).unwrap(),
             op: (buffer[6] as u16) << 8 | buffer[7] as u16,

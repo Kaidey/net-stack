@@ -27,14 +27,18 @@ pub struct IPv4Packet {
     payload: Vec<u8>,
 }
 
-pub mod pob {
+// DSCP codepoints for Per-Hop Behaviour https://networklessons.com/quality-of-service/ip-precedence-dscp-values
+pub mod phb {
 
-    pub const default_forwarding: u8 = 0;
+    // Modern DSCP values
+    pub const DEFAULT_FORWARDING: u8 = 0;
 
-    pub const expedited_forwarding: u8 = 46;
+    pub const EXPEDITED_FORWARDING: u8 = 46;
 
-    pub const voice_admit: u8 = 44;
+    pub const VOICE_ADMIT: u8 = 44;
 
+    // Each class is a different packet queue and the priority assigned to packets in each queue is
+    // defined by device/network config
     pub mod assured_forwarding {
         pub const AF11: u8 = 10;
         pub const AF12: u8 = 12;
@@ -53,6 +57,7 @@ pub mod pob {
         pub const AF43: u8 = 38;
     }
 
+    // For compatibility with old IP Precedence Type Of Service model
     pub mod class_selector {
         pub const CS0: u8 = 0;
         pub const CS1: u8 = 8;
@@ -79,6 +84,7 @@ pub enum Protocol {
 }
 
 impl IPv4Packet {
+    // TODO: Optional parameters
     fn new(
         tos: u8,
         fragmentation: FragmentationFlag,
@@ -91,10 +97,10 @@ impl IPv4Packet {
     ) -> Self {
         let mut packet: Self = Self {
             version: 4,
-            ihl: 0, // calc at runtime
-            tos: pob::assured_forwarding::AF11,
-            total_len: 0,         // calc at runtime
-            id: next_packet_id(), // randgen?
+            ihl: 0,
+            tos: tos,
+            total_len: 0,
+            id: next_packet_id(),
             flags: fragmentation as u8,
             fragment_offset: fragment_offset,
             ttl: 128, // recommended defaults are 64 (Linux), 128 (Win), 255 (Net devices)
@@ -110,6 +116,7 @@ impl IPv4Packet {
         packet.add_padding();
         packet.ihl = packet.calc_header_len();
         packet.total_len = packet.to_bytes().len() as u16;
+        packet.checksum = packet.calc_checksum();
 
         return packet;
     }
@@ -155,15 +162,49 @@ impl IPv4Packet {
     fn add_padding(&mut self) {
         let mut packet_as_bytes = self.to_bytes();
 
-        // IPv4 packet length is measued in 32-bit words, so the total length should be divisible
+        // IPv4 packet length is measured in 32-bit words, so the total length should be divisible
         // by 4
         if packet_as_bytes.len() % 4 != 0 {
             self.padding.push(0);
             packet_as_bytes = self.to_bytes();
         }
     }
-    
-    fn calc_checksum(){}
+
+    fn calc_checksum(&self) -> u16 {
+        let packet_header_bytes: Vec<u8> = self.to_bytes();
+        let mut count = 0;
+        let mut sum: u32 = 0;
+
+        // Calculate sum of every 16 bit word on the packet header
+        while count < packet_header_bytes.len() {
+            // Combine 2 bytes into a 16 bit word
+            let next_16bit_word =
+                ((packet_header_bytes[count] as u16) << 8) | packet_header_bytes[count + 1] as u16;
+
+            sum = sum + next_16bit_word as u32;
+            count = count + 2;
+        }
+
+        // Checksum needs to be a 16 bit word, so, if the final sum is more than 16 bits, we
+        // remove the extra bits (most significant) and add them onto the checksum word (16
+        // least significant bits)
+        
+        // 16-bit right shift to extract extra bits
+        //
+        // E.g: sum = 2D130 -> extra_bits = 2
+        let extra_bits = sum >> 16;
+
+        // 16-bit left shift to discard most significant extra bits followed by 16-bit right shift
+        // to restore the original least significant 16-bit word
+        //
+        // E.g: sum = 2D130 -> sum_ls16bit = D130
+        let sum_ls16bit = (sum << 16) >> 16;
+
+        // Add the extra bits to the least significant 16 bits of the final sum
+        // and calculate the 1's complement of the resulting value (flipping all bits) using XOR
+        return ((sum_ls16bit + extra_bits) ^ 0xFFFF).try_into().expect("Checksum is greater than 16 bits")
+
+    }
 }
 
 impl fmt::Display for IPv4Packet {
