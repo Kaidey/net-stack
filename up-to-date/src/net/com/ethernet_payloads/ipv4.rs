@@ -84,7 +84,12 @@ pub enum Protocol {
 }
 
 impl IPv4Packet {
-    pub fn new(protocol: Protocol, src_addr: [u8; 4], dest_addr: [u8; 4], payload: Vec<u8>) -> Self {
+    pub fn new(
+        protocol: Protocol,
+        src_addr: [u8; 4],
+        dest_addr: [u8; 4],
+        payload: Vec<u8>,
+    ) -> Self {
         let mut packet: Self = Self {
             version: 4,
             ihl: 0,
@@ -99,14 +104,14 @@ impl IPv4Packet {
             src_addr: src_addr,
             dest_addr: dest_addr,
             opts: vec![],
-            padding: vec![0],
+            padding: vec![],
             payload: payload,
         };
 
-        packet.add_padding();
-        packet.ihl = packet.calc_header_len();
+        packet.calc_padding();
+        packet.calc_header_len();
         packet.total_len = packet.to_bytes().len() as u16;
-        packet.checksum = packet.calc_checksum();
+        packet.calc_checksum();
 
         return packet;
     }
@@ -133,19 +138,28 @@ impl IPv4Packet {
 
     pub fn opts(mut self, opts: Vec<u8>) -> Self {
         self.opts = opts;
+        // Since opts is a Vec<u8> it can hold any number of bytes, so we need to recalculate
+        // padding for the packet header
+        self.calc_padding();
+        self.calc_header_len();
+        self.total_len = self.to_bytes().len() as u16;
+        self.calc_checksum();
         self
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes: Vec<u8> = Vec::new();
 
-        bytes.push(self.version);
-        bytes.push(self.ihl);
+        // Tho version and IHl are defined as u8 (because Rust doesn't have a type to accomodate
+        // less bits), those fields on a packet actually share a byte (4 bits each). So, when
+        // serializing the packet object we need to combine the two with a left shift + OR
+        bytes.push(self.version << 4 | self.ihl);
         bytes.push(self.tos);
         bytes.extend_from_slice(&self.total_len.to_be_bytes());
         bytes.extend_from_slice(&self.id.to_be_bytes());
-        bytes.push(self.flags);
-        bytes.extend_from_slice(&self.fragment_offset.to_be_bytes());
+        // Same thing as above, but here is a bit more awkward because flags is a 3 bit field while
+        // fragment_offset is a 13 bit field and they need to be combined into a 16 bit word
+        bytes.extend_from_slice(&((self.flags as u16) << 13 | self.fragment_offset).to_be_bytes());
         bytes.push(self.ttl);
         bytes.push(self.proto);
         bytes.extend_from_slice(&self.checksum.to_be_bytes());
@@ -158,7 +172,7 @@ impl IPv4Packet {
         return bytes;
     }
 
-    fn calc_header_len(&self) -> u8 {
+    fn calc_header_len(&mut self){
         let payload_len = self.payload.len();
 
         let packet_len = self.to_bytes().len();
@@ -171,21 +185,25 @@ impl IPv4Packet {
 
         // Header length is expressed as 32-bit words (4 bytes) and header_len is the length of the
         // header in bytes
-        return (header_len / 4) as u8;
+        self.ihl = (header_len / 4) as u8; 
     }
 
-    fn add_padding(&mut self) {
-        let mut packet_as_bytes = self.to_bytes();
+    fn calc_padding(&mut self) {
+        let payload_len = self.payload.len();
 
+        let mut packet_len = self.to_bytes().len();
+
+        let mut header_len = packet_len - payload_len;
         // IPv4 packet length is measured in 32-bit words, so the total length should be divisible
         // by 4
-        if packet_as_bytes.len() % 4 != 0 {
+        while header_len % 4 != 0 {
             self.padding.push(0);
-            packet_as_bytes = self.to_bytes();
+            packet_len = self.to_bytes().len();
+            header_len = packet_len - payload_len;
         }
     }
 
-    fn calc_checksum(&self) -> u16 {
+    fn calc_checksum(&mut self) {
         let packet_header_bytes: Vec<u8> = self.to_bytes();
         let mut count = 0;
         let mut sum: u32 = 0;
@@ -217,7 +235,7 @@ impl IPv4Packet {
 
         // Add the extra bits to the least significant 16 bits of the final sum
         // and calculate the 1's complement of the resulting value (flipping all bits) using XOR
-        return ((sum_ls16bit + extra_bits) ^ 0xFFFF)
+        self.checksum = ((sum_ls16bit + extra_bits) ^ 0xFFFF)
             .try_into()
             .expect("Checksum is greater than 16 bits");
     }
