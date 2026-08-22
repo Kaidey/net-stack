@@ -21,4 +21,5 @@ pub fn test() {
     //
     // println!("Destination MAC: {:02X?}", dest_mac.unwrap());
     //
+   ipv4::IPv4Packet::new(ipv4::Protocol::ICMP, [192,168,68,1], [192,172,50,1],vec![1,2]).ttl(64).tos(ipv4::phb::EXPEDITED_FORWARDING); 
 }

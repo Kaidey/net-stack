@@ -84,31 +84,21 @@ pub enum Protocol {
 }
 
 impl IPv4Packet {
-    // TODO: Optional parameters
-    fn new(
-        tos: u8,
-        fragmentation: FragmentationFlag,
-        fragment_offset: u16,
-        protocol: Protocol,
-        src_addr: [u8; 4],
-        dest_addr: [u8; 4],
-        opts: Vec<u8>,
-        payload: Vec<u8>,
-    ) -> Self {
+    pub fn new(protocol: Protocol, src_addr: [u8; 4], dest_addr: [u8; 4], payload: Vec<u8>) -> Self {
         let mut packet: Self = Self {
             version: 4,
             ihl: 0,
-            tos: tos,
+            tos: phb::DEFAULT_FORWARDING,
             total_len: 0,
             id: next_packet_id(),
-            flags: fragmentation as u8,
-            fragment_offset: fragment_offset,
+            flags: FragmentationFlag::NoFragLast as u8,
+            fragment_offset: 0,
             ttl: 128, // recommended defaults are 64 (Linux), 128 (Win), 255 (Net devices)
             proto: protocol as u8,
             checksum: 0,
             src_addr: src_addr,
             dest_addr: dest_addr,
-            opts: opts,
+            opts: vec![],
             padding: vec![0],
             payload: payload,
         };
@@ -119,6 +109,31 @@ impl IPv4Packet {
         packet.checksum = packet.calc_checksum();
 
         return packet;
+    }
+
+    pub fn tos(mut self, tos: u8) -> Self {
+        self.tos = tos;
+        self
+    }
+
+    pub fn flags(mut self, flags: u8) -> Self {
+        self.flags = flags;
+        self
+    }
+
+    pub fn fragment_offset(mut self, offset: u16) -> Self {
+        self.fragment_offset = offset;
+        self
+    }
+
+    pub fn ttl(mut self, ttl: u8) -> Self {
+        self.ttl = ttl;
+        self
+    }
+
+    pub fn opts(mut self, opts: Vec<u8>) -> Self {
+        self.opts = opts;
+        self
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -188,7 +203,7 @@ impl IPv4Packet {
         // Checksum needs to be a 16 bit word, so, if the final sum is more than 16 bits, we
         // remove the extra bits (most significant) and add them onto the checksum word (16
         // least significant bits)
-        
+
         // 16-bit right shift to extract extra bits
         //
         // E.g: sum = 2D130 -> extra_bits = 2
@@ -202,8 +217,9 @@ impl IPv4Packet {
 
         // Add the extra bits to the least significant 16 bits of the final sum
         // and calculate the 1's complement of the resulting value (flipping all bits) using XOR
-        return ((sum_ls16bit + extra_bits) ^ 0xFFFF).try_into().expect("Checksum is greater than 16 bits")
-
+        return ((sum_ls16bit + extra_bits) ^ 0xFFFF)
+            .try_into()
+            .expect("Checksum is greater than 16 bits");
     }
 }
 
