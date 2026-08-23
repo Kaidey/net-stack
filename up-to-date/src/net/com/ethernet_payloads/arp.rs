@@ -2,8 +2,8 @@ use crate::net::com::AddressFamily;
 use core::fmt;
 
 pub struct ArpPacket {
-    hardware_addr: AddressFamily,
-    proto_addr: AddressFamily,
+    hardware_addr_family: AddressFamily,
+    proto_addr_family: AddressFamily,
     pub op: u16,
     pub src_hardware_addr: [u8; 6],
     pub src_proto_addr: [u8; 4],
@@ -14,16 +14,16 @@ pub struct ArpPacket {
 
 impl ArpPacket {
     pub fn new_request(
-        hardware_addr: AddressFamily,
-        proto_addr: AddressFamily,
+        hardware_addr_family: AddressFamily,
+        proto_addr_family: AddressFamily,
         src_hardware_addr: [u8; 6],
         src_proto_addr: [u8; 4],
         dest_hardware_addr: [u8; 6],
         dest_proto_addr: [u8; 4],
     ) -> Self {
         let mut packet = Self {
-            hardware_addr: hardware_addr,
-            proto_addr: proto_addr,
+            hardware_addr_family: hardware_addr_family,
+            proto_addr_family: proto_addr_family,
             op: 0x0001,
             src_hardware_addr: src_hardware_addr,
             src_proto_addr: src_proto_addr,
@@ -38,10 +38,10 @@ impl ArpPacket {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
-        bytes.extend_from_slice(&self.hardware_addr.family.to_be_bytes());
-        bytes.extend_from_slice(&self.proto_addr.family.to_be_bytes());
-        bytes.push(self.hardware_addr.len);
-        bytes.push(self.proto_addr.len);
+        bytes.extend_from_slice(&self.hardware_addr_family.family_codepoint.to_be_bytes());
+        bytes.extend_from_slice(&self.proto_addr_family.family_codepoint.to_be_bytes());
+        bytes.push(self.hardware_addr_family.len);
+        bytes.push(self.proto_addr_family.len);
         bytes.extend_from_slice(&self.op.to_be_bytes());
         bytes.extend_from_slice(&self.src_hardware_addr);
         bytes.extend_from_slice(&self.src_proto_addr);
@@ -65,13 +65,19 @@ impl From<Vec<u8>> for ArpPacket {
         let mut packet = Self {
             // Combines the first 2 u8 of buffer into a u16 by casting the first u8 to u16 and then
             // shifting it 8 bits left. Finally, performs an OR with the second u8
-            hardware_addr: AddressFamily::from_family(((buffer[0] as u16) << 8) | buffer[1] as u16).unwrap(), 
-            proto_addr: AddressFamily::from_family(((buffer[2] as u16) << 8) | buffer[3] as u16).unwrap(),
+            hardware_addr_family: AddressFamily::from_family_codepoint(
+                ((buffer[0] as u16) << 8) | buffer[1] as u16,
+            )
+            .unwrap(),
+            proto_addr_family: AddressFamily::from_family_codepoint(
+                ((buffer[2] as u16) << 8) | buffer[3] as u16,
+            )
+            .unwrap(),
             op: (buffer[6] as u16) << 8 | buffer[7] as u16,
-            src_hardware_addr: [0,0,0,0,0,0],
-            src_proto_addr: [0,0,0,0],
-            dest_hardware_addr: [0,0,0,0,0,0],
-            dest_proto_addr: [0,0,0,0],
+            src_hardware_addr: [0, 0, 0, 0, 0, 0],
+            src_proto_addr: [0, 0, 0, 0],
+            dest_hardware_addr: [0, 0, 0, 0, 0, 0],
+            dest_proto_addr: [0, 0, 0, 0],
             padding: buffer[28..].to_vec(),
         };
 
@@ -84,19 +90,25 @@ impl From<Vec<u8>> for ArpPacket {
     }
 }
 impl fmt::Display for ArpPacket {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         println!(
             "Hardware Address Type: {:04?} ({})",
-            self.hardware_addr.family,
-            AddressFamily::name(&self.hardware_addr)
+            self.hardware_addr_family.family_codepoint,
+            AddressFamily::name(&self.hardware_addr_family)
         );
         println!(
             "Protocol Address Type: {:04X?} ({})",
-            self.proto_addr.family,
-            AddressFamily::name(&self.proto_addr)
+            self.proto_addr_family.family_codepoint,
+            AddressFamily::name(&self.proto_addr_family)
         );
-        println!("Hardware Address Length: {:02X?}", self.hardware_addr.len);
-        println!("Protocol Address Length: {:02X?}", self.proto_addr.len);
+        println!(
+            "Hardware Address Length: {:02X?}",
+            self.hardware_addr_family.len
+        );
+        println!(
+            "Protocol Address Length: {:02X?}",
+            self.proto_addr_family.len
+        );
 
         match self.op {
             0x0001 => println!("Operation: {:04?} ({})", self.op, "Request"),
@@ -106,19 +118,23 @@ impl fmt::Display for ArpPacket {
 
         println!(
             "Source Hardware Address: {}",
-            AddressFamily::to_string(&self.hardware_addr, self.src_hardware_addr.to_vec())
+            self.hardware_addr_family
+                .addr_to_string(self.src_hardware_addr.to_vec())
         );
         println!(
             "Source Protocol Address: {}",
-            AddressFamily::to_string(&self.proto_addr, self.src_proto_addr.to_vec())
+            self.proto_addr_family
+                .addr_to_string(self.src_proto_addr.to_vec())
         );
         println!(
             "Destination Hardware Address: {}",
-            AddressFamily::to_string(&self.hardware_addr, self.dest_hardware_addr.to_vec())
+            self.hardware_addr_family
+                .addr_to_string(self.dest_hardware_addr.to_vec())
         );
         println!(
             "Destination Protocol Address: {}",
-            AddressFamily::to_string(&self.proto_addr, self.dest_proto_addr.to_vec())
+            self.proto_addr_family
+                .addr_to_string(self.dest_proto_addr.to_vec())
         );
 
         Result::Ok(())

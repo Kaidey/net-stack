@@ -1,5 +1,7 @@
 use core::fmt;
 
+use crate::net::com::AddressFamily;
+
 static mut NEXT_ID: u16 = 0;
 
 fn next_packet_id() -> u16 {
@@ -8,17 +10,16 @@ fn next_packet_id() -> u16 {
         NEXT_ID
     }
 }
-
 pub struct IPv4Packet {
     version: u8,
     ihl: u8,
     tos: u8,
     total_len: u16,
     id: u16,
-    flags: u8,
+    flags: FragmentationFlags,
     fragment_offset: u16,
     ttl: u8,
-    proto: u8,
+    proto: Protocol,
     checksum: u16,
     src_addr: [u8; 4],
     dest_addr: [u8; 4],
@@ -28,7 +29,8 @@ pub struct IPv4Packet {
 }
 
 // DSCP codepoints for Per-Hop Behaviour https://networklessons.com/quality-of-service/ip-precedence-dscp-values
-pub mod phb {
+pub mod dscp {
+    use crate::net::com::ethernet_payloads::ipv4::dscp;
 
     // Modern DSCP values
     pub const DEFAULT_FORWARDING: u8 = 0;
@@ -68,19 +70,70 @@ pub mod phb {
         pub const CS6: u8 = 48;
         pub const CS7: u8 = 56;
     }
-}
 
-pub enum FragmentationFlag {
+    pub fn to_string(dscp_value: u8) -> &'static str {
+        match dscp_value {
+            dscp::DEFAULT_FORWARDING => "Default",
+            dscp::EXPEDITED_FORWARDING => "Expedite Forwarding",
+            dscp::VOICE_ADMIT => "Voice Admit",
+            dscp::assured_forwarding::AF11 => "Assured Forwarding Class 1 Low-Drop",
+            dscp::assured_forwarding::AF12 => "Assured Forwarding Class 1 Medium-Drop",
+            dscp::assured_forwarding::AF13 => "Assured Forwarding Class 1 High-Drop",
+            dscp::assured_forwarding::AF21 => "Assured Forwarding Class 2 Low-Drop",
+            dscp::assured_forwarding::AF22 => "Assured Forwarding Class 2 Medium-Drop",
+            dscp::assured_forwarding::AF23 => "Assured Forwarding Class 2 High-Drop",
+            dscp::assured_forwarding::AF31 => "Assured Forwarding Class 3 Low-Drop",
+            dscp::assured_forwarding::AF32 => "Assured Forwarding Class 3 Medium-Drop",
+            dscp::assured_forwarding::AF33 => "Assured Forwarding Class 3 High-Drop",
+            dscp::assured_forwarding::AF41 => "Assured Forwarding Class 4 Low-Drop",
+            dscp::assured_forwarding::AF42 => "Assured Forwarding Class 4 Medium-Drop",
+            dscp::assured_forwarding::AF43 => "Assured Forwarding Class 4 High-Drop",
+            dscp::class_selector::CS1 => "Class Selector Priority",
+            dscp::class_selector::CS2 => "Class Selector Immediate",
+            dscp::class_selector::CS3 => "Class Selector Flash",
+            dscp::class_selector::CS4 => "Class Selector Flash Override",
+            dscp::class_selector::CS5 => "Class Selector Critic/Critical",
+            dscp::class_selector::CS6 => "Class Selector Internetwork Control",
+            dscp::class_selector::CS7 => "Class Selector Network Control",
+            _ => "Unknown DSCP value",
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub enum FragmentationFlags {
     FragLast = 0,
     FragMore = 1,
     NoFragLast = 2,
     NoFragMore = 3,
 }
 
+impl FragmentationFlags {
+    pub fn to_string(self) -> &'static str {
+        match self {
+            FragmentationFlags::FragLast => "Fragmentation Enabled, Last Fragment",
+            FragmentationFlags::FragMore => "Fragmentation Enabled, More Fragments",
+            FragmentationFlags::NoFragLast | FragmentationFlags::NoFragMore => {
+                "Fragmentation Disabled"
+            }
+        }
+    }
+}
+// TODO: Move out since it's not specific to IPv4
+#[derive(Clone, Copy)]
 pub enum Protocol {
     ICMP = 1,
     TCP = 6,
     UDP = 17,
+}
+
+impl Protocol{
+    pub fn to_string(&self) -> &'static str{
+        match self{
+            Protocol::ICMP => "ICMP",
+            Protocol::TCP => "TCP",
+            Protocol::UDP => "UDP"
+        }
+    }
 }
 
 impl IPv4Packet {
@@ -93,13 +146,13 @@ impl IPv4Packet {
         let mut packet: Self = Self {
             version: 4,
             ihl: 0,
-            tos: phb::DEFAULT_FORWARDING,
+            tos: dscp::DEFAULT_FORWARDING,
             total_len: 0,
             id: next_packet_id(),
-            flags: FragmentationFlag::NoFragLast as u8,
+            flags: FragmentationFlags::NoFragLast,
             fragment_offset: 0,
             ttl: 128, // recommended defaults are 64 (Linux), 128 (Win), 255 (Net devices)
-            proto: protocol as u8,
+            proto: protocol,
             checksum: 0,
             src_addr: src_addr,
             dest_addr: dest_addr,
@@ -121,7 +174,7 @@ impl IPv4Packet {
         self
     }
 
-    pub fn flags(mut self, flags: u8) -> Self {
+    pub fn flags(mut self, flags: FragmentationFlags) -> Self {
         self.flags = flags;
         self
     }
@@ -161,7 +214,7 @@ impl IPv4Packet {
         // fragment_offset is a 13 bit field and they need to be combined into a 16 bit word
         bytes.extend_from_slice(&((self.flags as u16) << 13 | self.fragment_offset).to_be_bytes());
         bytes.push(self.ttl);
-        bytes.push(self.proto);
+        bytes.push(self.proto as u8);
         bytes.extend_from_slice(&self.checksum.to_be_bytes());
         bytes.extend_from_slice(&self.src_addr);
         bytes.extend_from_slice(&self.dest_addr);
@@ -172,7 +225,7 @@ impl IPv4Packet {
         return bytes;
     }
 
-    fn calc_header_len(&mut self){
+    fn calc_header_len(&mut self) {
         let payload_len = self.payload.len();
 
         let packet_len = self.to_bytes().len();
@@ -185,7 +238,7 @@ impl IPv4Packet {
 
         // Header length is expressed as 32-bit words (4 bytes) and header_len is the length of the
         // header in bytes
-        self.ihl = (header_len / 4) as u8; 
+        self.ihl = (header_len / 4) as u8;
     }
 
     fn calc_padding(&mut self) {
@@ -242,7 +295,26 @@ impl IPv4Packet {
 }
 
 impl fmt::Display for IPv4Packet {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TODO")
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        println!("IP Protocol version: {:X}", self.version);
+        println!(
+            "Packet Header Length: {:X} ({} bytes)",
+            self.ihl,
+            self.ihl * 4
+        );
+        println!("Type Of Service (DSCP): {}", dscp::to_string(self.tos));
+        println!("ID: {:04X}", self.id);
+        println!("Fragmentation Flag: {}", self.flags.to_string());
+        println!("Fragment Offset: {:02X}", self.fragment_offset);
+        println!("Time To Live: {}", self.ttl);
+        println!("Next Level Protocol: {}", self.proto.to_string());
+        println!("Checksum: {:04X}", self.checksum);
+        println!("Source Address: {}", AddressFamily::IPV4.addr_to_string(self.src_addr.to_vec()));
+        println!("Destination Address: {}", AddressFamily::IPV4.addr_to_string(self.dest_addr.to_vec()));
+        println!("Options: {:X?}", self.opts);
+        //TODO: Implement after TCP is ready
+        // println!("Payload")
+
+        Result::Ok(())
     }
 }

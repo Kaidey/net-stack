@@ -1,5 +1,4 @@
 use core::fmt;
-use std::{array, fmt::UpperHex, io::Error, str::FromStr, string::FromUtf8Error};
 use libc::{c_void, recv, send};
 
 pub mod ethernet_payloads;
@@ -65,6 +64,7 @@ impl fmt::Display for EthernetFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut serialized_data: Option<PacketType> = None;
 
+        // TODO: Review
         for frame_type in FrameType::variations_as_vec().iter() {
             if frame_type.hex_value() == self.type_or_length {
                 serialized_data = FrameType::serialize_payload(frame_type, self.data.clone()) //frame_type.serialize_payload(self.data.clone());
@@ -73,11 +73,11 @@ impl fmt::Display for EthernetFrame {
 
         println!(
             "\nDestination MAC: {}",
-            AddressFamily::to_string(&AddressFamily::MAC, self.dest_mac_address.to_vec())
+            AddressFamily::MAC.addr_to_string(self.dest_mac_address.to_vec())
         );
         println!(
             "Source MAC: {}",
-            AddressFamily::to_string(&AddressFamily::MAC, self.src_mac_address.to_vec())
+            AddressFamily::MAC.addr_to_string(self.src_mac_address.to_vec())
         );
         println!(
             "Frame Type/Length: {:04X?} ({})",
@@ -95,13 +95,14 @@ impl fmt::Display for EthernetFrame {
         fmt::Result::Ok(())
     }
 }
+// TODO: Review structure, names of functions for FrameType enum and enum values as Hex
 pub enum PacketType {
     Arp(arp::ArpPacket),
     IPv4(ipv4::IPv4Packet),
     IPv6(ipv6::IPv6Packet),
 }
 #[repr(u16)]
-#[derive(PartialEq, Eq, Copy)]
+#[derive(Clone, Copy)]
 pub enum FrameType {
     Arp = 0x0806,
     IPv4 = 0x0800,
@@ -142,38 +143,32 @@ impl FrameType {
     }
 }
 
-impl Clone for FrameType {
-    fn clone(&self) -> Self {
-        self.to_owned()
-    }
-}
-
 pub struct AddressFamily {
-    pub family: u16,
+    pub family_codepoint: u16,
     pub len: u8,
 }
 
 impl AddressFamily {
-    pub const MAC: Self = Self { family: 1, len: 6 };
+    pub const MAC: Self = Self { family_codepoint: 1, len: 6 };
     pub const IPV4: Self = Self {
-        family: 2048,
+        family_codepoint: 2048,
         len: 4,
     };
     pub fn name(&self) -> &'static str {
-        match self.family {
-            family if family == AddressFamily::MAC.family => "MAC",
-            family if family == AddressFamily::IPV4.family => "IPv4",
+        match self.family_codepoint {
+            family if family == AddressFamily::MAC.family_codepoint => "MAC",
+            family if family == AddressFamily::IPV4.family_codepoint => "IPv4",
             _ => "Unknown Address Family",
         }
     }
-    fn to_string(&self, bytes: Vec<u8>) -> String {
-        match self.family {
-            family if family == AddressFamily::MAC.family => bytes
+    fn addr_to_string(&self, bytes: Vec<u8>) -> String {
+        match self.family_codepoint {
+            family if family == AddressFamily::MAC.family_codepoint => bytes
                 .iter()
                 .map(|byte| format!("{:02X?}", byte))
                 .collect::<Vec<_>>()
                 .join("-"),
-            family if family == AddressFamily::IPV4.family => bytes
+            family if family == AddressFamily::IPV4.family_codepoint => bytes
                 .iter()
                 .map(|byte| format!("{:#}", byte))
                 .collect::<Vec<_>>()
@@ -181,10 +176,10 @@ impl AddressFamily {
             _ => String::from("Unknown Address Family"),
         }
     }
-    fn from_family(family: u16) -> Option<Self> {
+    fn from_family_codepoint(family: u16) -> Option<Self> {
         match family {
-            family if family == AddressFamily::MAC.family => Some(AddressFamily::MAC),
-            family if family == AddressFamily::IPV4.family => Some(AddressFamily::IPV4),
+            family if family == AddressFamily::MAC.family_codepoint => Some(AddressFamily::MAC),
+            family if family == AddressFamily::IPV4.family_codepoint => Some(AddressFamily::IPV4),
             _ => None,
         }
     }

@@ -27,9 +27,8 @@ pub fn test() {
         [192, 172, 50, 1],
         vec![1, 2],
     )
-    .ttl(64)
-    .tos(ipv4::phb::EXPEDITED_FORWARDING)
-    .opts(vec![1,2]);
+    .ttl(128)
+    .tos(ipv4::dscp::DEFAULT_FORWARDING);
 
-    println!("{:02X?}", packet.to_bytes());
+    println!("{}", packet);
 }
