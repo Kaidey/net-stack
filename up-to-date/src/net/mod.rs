@@ -1,12 +1,9 @@
 mod com;
 mod socket;
 
-use std::str::FromStr;
-
 use com::ethernet_payloads::{arp, ipv4};
-use com::{AddressFamily, EthernetFrame};
-use libc::{c_void, recv, send};
 
+use crate::net::com::ethernet_payloads::ipv4::IPv4Packet;
 use crate::net::com::{FrameType, run_arp};
 
 pub fn test() {
@@ -28,7 +25,14 @@ pub fn test() {
         vec![1, 2],
     )
     .ttl(128)
+    .flags(ipv4::FragmentationFlags::FragMore)
+    .fragment_offset(0xB1)
+    .opts(vec![9,8,2,5,5,4])
     .tos(ipv4::dscp::DEFAULT_FORWARDING);
 
     println!("{}", packet);
+
+    let packet_from = IPv4Packet::from(packet.to_bytes());
+
+    println!("From: \n{}", packet_from);
 }

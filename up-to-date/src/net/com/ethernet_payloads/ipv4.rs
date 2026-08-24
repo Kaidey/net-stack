@@ -24,7 +24,6 @@ pub struct IPv4Packet {
     src_addr: [u8; 4],
     dest_addr: [u8; 4],
     opts: Vec<u8>,
-    padding: Vec<u8>,
     payload: Vec<u8>,
 }
 
@@ -118,6 +117,24 @@ impl FragmentationFlags {
         }
     }
 }
+
+impl From<u8> for FragmentationFlags {
+    fn from(flags: u8) -> Self {
+        match flags {
+            flags if flags == FragmentationFlags::FragMore as u8 => FragmentationFlags::FragLast,
+            flags if flags == FragmentationFlags::FragLast as u8 => FragmentationFlags::FragLast,
+            flags if flags == FragmentationFlags::NoFragMore as u8 => {
+                FragmentationFlags::NoFragMore
+            }
+            flags if flags == FragmentationFlags::NoFragLast as u8 => {
+                FragmentationFlags::NoFragLast
+            }
+
+            _ => panic!("Invalid Fragmentation Flags: {}", flags),
+        }
+    }
+}
+
 // TODO: Move out since it's not specific to IPv4
 #[derive(Clone, Copy)]
 pub enum Protocol {
@@ -126,12 +143,23 @@ pub enum Protocol {
     UDP = 17,
 }
 
-impl Protocol{
-    pub fn to_string(&self) -> &'static str{
-        match self{
+impl Protocol {
+    pub fn to_string(&self) -> &'static str {
+        match self {
             Protocol::ICMP => "ICMP",
             Protocol::TCP => "TCP",
-            Protocol::UDP => "UDP"
+            Protocol::UDP => "UDP",
+        }
+    }
+}
+
+impl From<u8> for Protocol {
+    fn from(proto: u8) -> Self {
+        match proto {
+            proto if proto == Protocol::ICMP as u8 => Protocol::ICMP,
+            proto if proto == Protocol::TCP as u8 => Protocol::TCP,
+            proto if proto == Protocol::UDP as u8 => Protocol::UDP,
+            _ => panic!("Unknown protocol: {}", proto),
         }
     }
 }
@@ -157,7 +185,6 @@ impl IPv4Packet {
             src_addr: src_addr,
             dest_addr: dest_addr,
             opts: vec![],
-            padding: vec![],
             payload: payload,
         };
 
@@ -219,7 +246,6 @@ impl IPv4Packet {
         bytes.extend_from_slice(&self.src_addr);
         bytes.extend_from_slice(&self.dest_addr);
         bytes.extend_from_slice(&self.opts);
-        bytes.extend_from_slice(&self.padding);
         bytes.extend_from_slice(&self.payload);
 
         return bytes;
@@ -250,7 +276,7 @@ impl IPv4Packet {
         // IPv4 packet length is measured in 32-bit words, so the total length should be divisible
         // by 4
         while header_len % 4 != 0 {
-            self.padding.push(0);
+            self.opts.push(0);
             packet_len = self.to_bytes().len();
             header_len = packet_len - payload_len;
         }
@@ -294,6 +320,40 @@ impl IPv4Packet {
     }
 }
 
+impl From<Vec<u8>> for IPv4Packet {
+    fn from(buffer: Vec<u8>) -> Self {
+
+        let ihl: u8 = (buffer[0] << 4) >> 4;
+        let total_len: u16 = (buffer[2] as u16) << 8 | buffer[3] as u16;
+        // Multiply ihl by 4 since header length is meased in 32-bit words (4 bytes)
+        // Convert to usize so we can use the result to index buffer
+        let payload_offset= (ihl * 4) as usize; 
+
+        let mut packet: Self = Self {
+            version: buffer[0] >> 4,
+            ihl: ihl,
+            tos: buffer[1],
+            total_len: total_len,
+            id: (buffer[4] as u16) << 8 | buffer[5] as u16,
+            flags: FragmentationFlags::from(buffer[6] >> 5), // 3 most significant bits
+            fragment_offset: ((buffer[6] << 3) >> 3) as u16 | buffer[7] as u16,
+            ttl: buffer[8],
+            proto: Protocol::from(buffer[9]),
+            checksum: (buffer[10] as u16) << 8 | buffer[11] as u16,
+            src_addr: [0, 0, 0, 0],
+            dest_addr: [0, 0, 0, 0],
+            // TODO: Option parser
+            opts: buffer[20..payload_offset].to_vec(),
+            payload: buffer[payload_offset..].to_vec(),
+        };
+
+        packet.src_addr.copy_from_slice(&buffer[12..16]); 
+        packet.dest_addr.copy_from_slice(&buffer[16..20]);
+
+        packet
+    }
+}
+
 impl fmt::Display for IPv4Packet {
     fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         println!("IP Protocol version: {:X}", self.version);
@@ -303,17 +363,26 @@ impl fmt::Display for IPv4Packet {
             self.ihl * 4
         );
         println!("Type Of Service (DSCP): {}", dscp::to_string(self.tos));
+        println!("Total Packet Length: {}", self.total_len);
         println!("ID: {:04X}", self.id);
         println!("Fragmentation Flag: {}", self.flags.to_string());
         println!("Fragment Offset: {:02X}", self.fragment_offset);
         println!("Time To Live: {}", self.ttl);
         println!("Next Level Protocol: {}", self.proto.to_string());
         println!("Checksum: {:04X}", self.checksum);
-        println!("Source Address: {}", AddressFamily::IPV4.addr_to_string(self.src_addr.to_vec()));
-        println!("Destination Address: {}", AddressFamily::IPV4.addr_to_string(self.dest_addr.to_vec()));
+        println!(
+            "Source Address: {}",
+            AddressFamily::IPV4.addr_to_string(self.src_addr.to_vec())
+        );
+        println!(
+            "Destination Address: {}",
+            AddressFamily::IPV4.addr_to_string(self.dest_addr.to_vec())
+        );
+        // TODO: Option parser
         println!("Options: {:X?}", self.opts);
         //TODO: Implement after TCP is ready
         // println!("Payload")
+        println!("Payload: {:X?}", self.payload);
 
         Result::Ok(())
     }

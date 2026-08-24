@@ -110,6 +110,7 @@ pub enum FrameType {
 }
 
 impl FrameType {
+    // TODO: Impl From instead of this
     pub fn name_from_u16(value: u16) -> &'static str {
         match value {
             0x0806 => "ARP",
@@ -176,6 +177,7 @@ impl AddressFamily {
             _ => String::from("Unknown Address Family"),
         }
     }
+    // TODO: Impl From instead of this
     fn from_family_codepoint(family: u16) -> Option<Self> {
         match family {
             family if family == AddressFamily::MAC.family_codepoint => Some(AddressFamily::MAC),
