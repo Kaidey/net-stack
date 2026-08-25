@@ -3,7 +3,6 @@ mod socket;
 
 use com::ethernet_payloads::{arp, ipv4};
 
-use crate::net::com::ethernet_payloads::ipv4::IPv4Packet;
 use crate::net::com::{FrameType, run_arp};
 
 pub fn test() {
@@ -18,7 +17,7 @@ pub fn test() {
     //
     // println!("Destination MAC: {:02X?}", dest_mac.unwrap());
     //
-    let packet: ipv4::IPv4Packet = ipv4::IPv4Packet::new(
+    let packet: ipv4::Datagram = ipv4::Datagram::new(
         ipv4::Protocol::ICMP,
         [192, 168, 68, 1],
         [192, 172, 50, 1],
@@ -32,7 +31,4 @@ pub fn test() {
 
     println!("{}", packet);
 
-    let packet_from = IPv4Packet::from(packet.to_bytes());
-
-    println!("From: \n{}", packet_from);
 }

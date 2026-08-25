@@ -1,18 +1,21 @@
 use core::fmt;
 
-use crate::net::com::AddressFamily;
+use crate::net::com::{AddressFamily, ethernet_payloads::utils};
 
 static mut NEXT_ID: u16 = 0;
 
-fn next_packet_id() -> u16 {
+fn next_datagram_id() -> u16 {
     unsafe {
         NEXT_ID = NEXT_ID.wrapping_add(1);
         NEXT_ID
     }
 }
-pub struct IPv4Packet {
+pub struct Datagram {
     version: u8,
-    ihl: u8,
+    // In the struct, header length will be used as the total byte count instead of the 32-bit word
+    // count for simplicity. Convertion will happen when transforming a struct instance into a byte
+    // stream and when creating an instance from a byte stream
+    hlen: u8,
     tos: u8,
     total_len: u16,
     id: u16,
@@ -38,7 +41,7 @@ pub mod dscp {
 
     pub const VOICE_ADMIT: u8 = 44;
 
-    // Each class is a different packet queue and the priority assigned to packets in each queue is
+    // Each class is a different datagram queue and the priority assigned to datagrams in each queue is
     // defined by device/network config
     pub mod assured_forwarding {
         pub const AF11: u8 = 10;
@@ -70,6 +73,7 @@ pub mod dscp {
         pub const CS7: u8 = 56;
     }
 
+    // TODO: Change to impl Display
     pub fn to_string(dscp_value: u8) -> &'static str {
         match dscp_value {
             dscp::DEFAULT_FORWARDING => "Default",
@@ -107,6 +111,7 @@ pub enum FragmentationFlags {
 }
 
 impl FragmentationFlags {
+    // TODO: Change to impl Display
     pub fn to_string(self) -> &'static str {
         match self {
             FragmentationFlags::FragLast => "Fragmentation Enabled, Last Fragment",
@@ -144,6 +149,7 @@ pub enum Protocol {
 }
 
 impl Protocol {
+    // TODO: Change to impl Display
     pub fn to_string(&self) -> &'static str {
         match self {
             Protocol::ICMP => "ICMP",
@@ -164,19 +170,22 @@ impl From<u8> for Protocol {
     }
 }
 
-impl IPv4Packet {
+impl Datagram {
     pub fn new(
         protocol: Protocol,
         src_addr: [u8; 4],
         dest_addr: [u8; 4],
         payload: Vec<u8>,
     ) -> Self {
-        let mut packet: Self = Self {
+        let default_hlen: u8 = 20;
+        let default_total_len: u16 = (default_hlen as usize + payload.len()) as u16;
+
+        let mut datagram: Self = Self {
             version: 4,
-            ihl: 0,
+            hlen: default_hlen,
             tos: dscp::DEFAULT_FORWARDING,
-            total_len: 0,
-            id: next_packet_id(),
+            total_len: default_total_len,
+            id: next_datagram_id(),
             flags: FragmentationFlags::NoFragLast,
             fragment_offset: 0,
             ttl: 128, // recommended defaults are 64 (Linux), 128 (Win), 255 (Net devices)
@@ -188,12 +197,9 @@ impl IPv4Packet {
             payload: payload,
         };
 
-        packet.calc_padding();
-        packet.calc_header_len();
-        packet.total_len = packet.to_bytes().len() as u16;
-        packet.calc_checksum();
+        datagram.checksum = utils::calc_checksum(&datagram.to_bytes()[0..default_hlen as usize]);
 
-        return packet;
+        return datagram;
     }
 
     pub fn tos(mut self, tos: u8) -> Self {
@@ -218,12 +224,14 @@ impl IPv4Packet {
 
     pub fn opts(mut self, opts: Vec<u8>) -> Self {
         self.opts = opts;
-        // Since opts is a Vec<u8> it can hold any number of bytes, so we need to recalculate
-        // padding for the packet header
-        self.calc_padding();
-        self.calc_header_len();
-        self.total_len = self.to_bytes().len() as u16;
-        self.calc_checksum();
+
+        let post_opts_hlen = self.hlen as usize + self.opts.len();
+
+        let post_padding_hlen = utils::byte_alignment_padding(post_opts_hlen, 4, &mut self.opts);
+
+        self.hlen = post_padding_hlen as u8;
+        self.total_len = (post_padding_hlen + self.payload.len()) as u16;
+        self.checksum = utils::calc_checksum(&self.to_bytes()[0..post_padding_hlen]);
         self
     }
 
@@ -231,9 +239,9 @@ impl IPv4Packet {
         let mut bytes: Vec<u8> = Vec::new();
 
         // Tho version and IHl are defined as u8 (because Rust doesn't have a type to accomodate
-        // less bits), those fields on a packet actually share a byte (4 bits each). So, when
-        // serializing the packet object we need to combine the two with a left shift + OR
-        bytes.push(self.version << 4 | self.ihl);
+        // less bits), those fields on a datagram actually share a byte (4 bits each). So, when
+        // serializing the datagram object we need to combine the two with a left shift + OR
+        bytes.push(self.version << 4 | self.hlen / 4);
         bytes.push(self.tos);
         bytes.extend_from_slice(&self.total_len.to_be_bytes());
         bytes.extend_from_slice(&self.id.to_be_bytes());
@@ -250,88 +258,19 @@ impl IPv4Packet {
 
         return bytes;
     }
-
-    fn calc_header_len(&mut self) {
-        let payload_len = self.payload.len();
-
-        let packet_len = self.to_bytes().len();
-
-        let header_len = packet_len - payload_len;
-
-        if header_len < 20 {
-            panic!("[Packet][IPv4][Create] IPv4 packet header length is less than minimum 20");
-        }
-
-        // Header length is expressed as 32-bit words (4 bytes) and header_len is the length of the
-        // header in bytes
-        self.ihl = (header_len / 4) as u8;
-    }
-
-    fn calc_padding(&mut self) {
-        let payload_len = self.payload.len();
-
-        let mut packet_len = self.to_bytes().len();
-
-        let mut header_len = packet_len - payload_len;
-        // IPv4 packet length is measured in 32-bit words, so the total length should be divisible
-        // by 4
-        while header_len % 4 != 0 {
-            self.opts.push(0);
-            packet_len = self.to_bytes().len();
-            header_len = packet_len - payload_len;
-        }
-    }
-
-    fn calc_checksum(&mut self) {
-        let packet_header_bytes: Vec<u8> = self.to_bytes();
-        let mut count = 0;
-        let mut sum: u32 = 0;
-
-        // Calculate sum of every 16 bit word on the packet header
-        while count < packet_header_bytes.len() {
-            // Combine 2 bytes into a 16 bit word
-            let next_16bit_word =
-                ((packet_header_bytes[count] as u16) << 8) | packet_header_bytes[count + 1] as u16;
-
-            sum = sum + next_16bit_word as u32;
-            count = count + 2;
-        }
-
-        // Checksum needs to be a 16 bit word, so, if the final sum is more than 16 bits, we
-        // remove the extra bits (most significant) and add them onto the checksum word (16
-        // least significant bits)
-
-        // 16-bit right shift to extract extra bits
-        //
-        // E.g: sum = 2D130 -> extra_bits = 2
-        let extra_bits = sum >> 16;
-
-        // 16-bit left shift to discard most significant extra bits followed by 16-bit right shift
-        // to restore the original least significant 16-bit word
-        //
-        // E.g: sum = 2D130 -> sum_ls16bit = D130
-        let sum_ls16bit = (sum << 16) >> 16;
-
-        // Add the extra bits to the least significant 16 bits of the final sum
-        // and calculate the 1's complement of the resulting value (flipping all bits) using XOR
-        self.checksum = ((sum_ls16bit + extra_bits) ^ 0xFFFF)
-            .try_into()
-            .expect("Checksum is greater than 16 bits");
-    }
 }
 
-impl From<Vec<u8>> for IPv4Packet {
+impl From<Vec<u8>> for Datagram {
     fn from(buffer: Vec<u8>) -> Self {
-
-        let ihl: u8 = (buffer[0] << 4) >> 4;
+        let hlen: u8 = (buffer[0] << 4) >> 4;
         let total_len: u16 = (buffer[2] as u16) << 8 | buffer[3] as u16;
-        // Multiply ihl by 4 since header length is meased in 32-bit words (4 bytes)
+        // Multiply hlen by 4 since header length is meased in 32-bit words (4 bytes)
         // Convert to usize so we can use the result to index buffer
-        let payload_offset= (ihl * 4) as usize; 
+        let payload_offset = (hlen * 4) as usize;
 
-        let mut packet: Self = Self {
+        let mut datagram: Self = Self {
             version: buffer[0] >> 4,
-            ihl: ihl,
+            hlen: hlen * 4,
             tos: buffer[1],
             total_len: total_len,
             id: (buffer[4] as u16) << 8 | buffer[5] as u16,
@@ -347,23 +286,23 @@ impl From<Vec<u8>> for IPv4Packet {
             payload: buffer[payload_offset..].to_vec(),
         };
 
-        packet.src_addr.copy_from_slice(&buffer[12..16]); 
-        packet.dest_addr.copy_from_slice(&buffer[16..20]);
+        datagram.src_addr.copy_from_slice(&buffer[12..16]);
+        datagram.dest_addr.copy_from_slice(&buffer[16..20]);
 
-        packet
+        datagram
     }
 }
 
-impl fmt::Display for IPv4Packet {
+impl fmt::Display for Datagram {
     fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         println!("IP Protocol version: {:X}", self.version);
         println!(
-            "Packet Header Length: {:X} ({} bytes)",
-            self.ihl,
-            self.ihl * 4
+            "Datagram Header Length: {:X} ({} bytes)",
+            self.hlen / 4,
+            self.hlen
         );
         println!("Type Of Service (DSCP): {}", dscp::to_string(self.tos));
-        println!("Total Packet Length: {}", self.total_len);
+        println!("Total Datagram Length: {}", self.total_len);
         println!("ID: {:04X}", self.id);
         println!("Fragmentation Flag: {}", self.flags.to_string());
         println!("Fragment Offset: {:02X}", self.fragment_offset);
@@ -387,3 +326,4 @@ impl fmt::Display for IPv4Packet {
         Result::Ok(())
     }
 }
+// TODO: Fragmentation

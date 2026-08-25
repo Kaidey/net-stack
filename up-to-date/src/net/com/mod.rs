@@ -4,7 +4,7 @@ use libc::{c_void, recv, send};
 pub mod ethernet_payloads;
 use ethernet_payloads::{arp, ipv4, ipv6};
 
-use crate::net::com::ethernet_payloads::arp::ArpPacket;
+use crate::net::com::ethernet_payloads::arp::Datagram;
 
 pub struct EthernetFrame {
     dest_mac_address: [u8; 6],
@@ -97,8 +97,8 @@ impl fmt::Display for EthernetFrame {
 }
 // TODO: Review structure, names of functions for FrameType enum and enum values as Hex
 pub enum PacketType {
-    Arp(arp::ArpPacket),
-    IPv4(ipv4::IPv4Packet),
+    Arp(arp::Datagram),
+    IPv4(ipv4::Datagram),
     IPv6(ipv6::IPv6Packet),
 }
 #[repr(u16)]
@@ -188,7 +188,7 @@ impl AddressFamily {
 }
 
 pub fn run_arp(socket_fd: i32, src_mac: [u8; 6], src_ip: [u8; 4], dest_ip: [u8; 4]) -> Option<[u8; 6]> {
-    let arp_packet = arp::ArpPacket::new_request(
+    let arp_packet = arp::Datagram::new_request(
         AddressFamily::MAC,
         AddressFamily::IPV4,
         src_mac,
@@ -245,7 +245,7 @@ pub fn run_arp(socket_fd: i32, src_mac: [u8; 6], src_ip: [u8; 4], dest_ip: [u8; 
         }
 
         let frame: EthernetFrame = EthernetFrame::from(buffer.to_vec());
-        let is_arp: ArpPacket = ArpPacket::from(frame.data);
+        let is_arp: Datagram = Datagram::from(frame.data);
 
         if is_arp.op == 0x0002 && is_arp.dest_hardware_addr == src_mac{
             dest_mac = Some(is_arp.src_hardware_addr);

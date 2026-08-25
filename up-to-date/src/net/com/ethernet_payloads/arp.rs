@@ -1,7 +1,10 @@
-use crate::net::com::AddressFamily;
+use crate::net::com::{
+    AddressFamily,
+    ethernet_payloads::{self, utils},
+};
 use core::fmt;
 
-pub struct ArpPacket {
+pub struct Datagram {
     hardware_addr_family: AddressFamily,
     proto_addr_family: AddressFamily,
     pub op: u16,
@@ -12,7 +15,7 @@ pub struct ArpPacket {
     padding: Vec<u8>,
 }
 
-impl ArpPacket {
+impl Datagram {
     pub fn new_request(
         hardware_addr_family: AddressFamily,
         proto_addr_family: AddressFamily,
@@ -21,7 +24,7 @@ impl ArpPacket {
         dest_hardware_addr: [u8; 6],
         dest_proto_addr: [u8; 4],
     ) -> Self {
-        let mut packet = Self {
+        let mut datagram = Self {
             hardware_addr_family: hardware_addr_family,
             proto_addr_family: proto_addr_family,
             op: 0x0001,
@@ -32,8 +35,8 @@ impl ArpPacket {
             padding: vec![],
         };
 
-        packet.add_padding();
-        packet
+        utils::fixed_size_header_padding(datagram.to_bytes().len(), 40, &mut datagram.padding);
+        datagram
     }
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -51,18 +54,10 @@ impl ArpPacket {
 
         bytes
     }
-    fn add_padding(&mut self) {
-        let mut packet_as_bytes = self.to_bytes();
-
-        while packet_as_bytes.len() < 40 {
-            self.padding.push(0);
-            packet_as_bytes = self.to_bytes();
-        }
-    }
 }
-impl From<Vec<u8>> for ArpPacket {
+impl From<Vec<u8>> for Datagram {
     fn from(buffer: Vec<u8>) -> Self {
-        let mut packet = Self {
+        let mut datagram = Self {
             // Combines the first 2 u8 of buffer into a u16 by casting the first u8 to u16 and then
             // shifting it 8 bits left. Finally, performs an OR with the second u8
             hardware_addr_family: AddressFamily::from_family_codepoint(
@@ -81,15 +76,15 @@ impl From<Vec<u8>> for ArpPacket {
             padding: buffer[28..].to_vec(),
         };
 
-        packet.src_hardware_addr.copy_from_slice(&buffer[8..14]);
-        packet.src_proto_addr.copy_from_slice(&buffer[14..18]);
-        packet.dest_hardware_addr.copy_from_slice(&buffer[18..24]);
-        packet.dest_proto_addr.copy_from_slice(&buffer[24..28]);
+        datagram.src_hardware_addr.copy_from_slice(&buffer[8..14]);
+        datagram.src_proto_addr.copy_from_slice(&buffer[14..18]);
+        datagram.dest_hardware_addr.copy_from_slice(&buffer[18..24]);
+        datagram.dest_proto_addr.copy_from_slice(&buffer[24..28]);
 
-        packet
+        datagram
     }
 }
-impl fmt::Display for ArpPacket {
+impl fmt::Display for Datagram {
     fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         println!(
             "Hardware Address Type: {:04?} ({})",
