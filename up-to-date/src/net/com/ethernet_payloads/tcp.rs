@@ -10,7 +10,7 @@ pub struct Segment {
     // In the struct, header length will be used as the total byte count instead of the 32-bit word
     // count for simplicity. Convertion will happen when transforming a struct instance into a byte
     // stream and when creating an instance from a byte stream
-    hlen: u8,
+    hlen: usize,
     flags: Flags,
     window: u16,
     checksum: u16,
@@ -49,31 +49,31 @@ impl Flags {
 impl fmt::Display for Flags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.contains(Flags::FIN) {
-            write!(f, "Finish");
+            write!(f, "Finish ");
         }
         if self.contains(Flags::SYN) {
-            write!(f, "Synchronize");
+            write!(f, "Synchronize ");
         }
         if self.contains(Flags::RST) {
-            write!(f, "Reset");
+            write!(f, "Reset ");
         }
         if self.contains(Flags::PSH) {
-            write!(f, "Push");
+            write!(f, "Push ");
         }
         if self.contains(Flags::ACK) {
-            write!(f, "Acknowledge");
+            write!(f, "Acknowledge ");
         }
         if self.contains(Flags::URG) {
-            write!(f, "Urgent");
+            write!(f, "Urgent ");
         }
         if self.contains(Flags::ECE) {
-            write!(f, "ECN Echo");
+            write!(f, "ECN Echo ");
         }
         if self.contains(Flags::CWR) {
-            write!(f, "Congestion Window Reduced");
+            write!(f, "Congestion Window Reduced ");
         }
         if self.contains(Flags::AE) {
-            write!(f, "Accurate ECN");
+            write!(f, "Accurate ECN ");
         }
 
         Result::Ok(())
@@ -81,8 +81,8 @@ impl fmt::Display for Flags {
 }
 
 impl From<u16> for Flags {
-    fn from(flags: u16) -> Self {
-        Self(flags)
+    fn from(value: u16) -> Self {
+        Self(value)
     }
 }
 
@@ -112,7 +112,7 @@ impl BitOr for Flags {
     }
 }
 
-// Allows "|=" syntax (OR and assign) like += 
+// Allows "|=" syntax (OR and assign) like +=
 impl BitOrAssign for Flags {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0
@@ -151,7 +151,7 @@ impl Segment {
     pub fn opts(mut self, opts: Vec<u8>) -> Self {
         self.opts = opts;
 
-        let post_opts_hlen = self.hlen as usize + self.opts.len();
+        let post_opts_hlen = self.hlen + self.opts.len();
 
         let post_padding_hlen = utils::byte_alignment_padding(post_opts_hlen, 4, &mut self.opts);
 
@@ -159,31 +159,8 @@ impl Segment {
             panic!("[TCP][Segment][AddOpts] TCP segment header length is more than maximum 60");
         }
 
-        self.hlen = post_padding_hlen as u8;
+        self.hlen = post_padding_hlen;
         self
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes: Vec<u8> = Vec::new();
-
-        // Divide hlen by 4 since header length field is calculated in 32-bit words
-        let hlen_and_flags: u16 = ((self.hlen / 4) as u16) << 12 | self.flags.bits();
-
-        // TODO: Checksum solution only before wire setup. TCP Checksum needs IP Header info
-        // (confirm)
-
-        bytes.extend_from_slice(&self.src_port.to_be_bytes());
-        bytes.extend_from_slice(&self.dest_port.to_be_bytes());
-        bytes.extend_from_slice(&self.seq_num.to_be_bytes());
-        bytes.extend_from_slice(&self.ack_num.to_be_bytes());
-        bytes.extend_from_slice(&hlen_and_flags.to_be_bytes());
-        bytes.extend_from_slice(&self.window.to_be_bytes());
-        // bytes.extend_from_slice(&checksum.to_be_bytes());
-        bytes.extend_from_slice(&self.urgent_ptr.to_be_bytes());
-        bytes.extend_from_slice(&self.opts);
-        bytes.extend_from_slice(&self.payload);
-
-        bytes
     }
 
     // Generate the Initial Sequence Number
@@ -193,5 +170,77 @@ impl Segment {
     }
 }
 
-// TODO: Impl From
-// TODO: Impl Display
+impl From<Segment> for Vec<u8> {
+    fn from(segment: Segment) -> Self {
+        let mut bytes: Vec<u8> = Vec::new();
+
+        // Divide hlen by 4 since header length field is calculated in 32-bit words
+        let hlen_and_flags: u16 = ((segment.hlen / 4) as u16) << 12 | segment.flags.bits();
+
+        // TODO: Calc Checksum here only
+
+        bytes.extend_from_slice(&segment.src_port.to_be_bytes());
+        bytes.extend_from_slice(&segment.dest_port.to_be_bytes());
+        bytes.extend_from_slice(&segment.seq_num.to_be_bytes());
+        bytes.extend_from_slice(&segment.ack_num.to_be_bytes());
+        bytes.extend_from_slice(&hlen_and_flags.to_be_bytes());
+        bytes.extend_from_slice(&segment.window.to_be_bytes());
+        bytes.extend_from_slice(&segment.checksum.to_be_bytes());
+        bytes.extend_from_slice(&segment.urgent_ptr.to_be_bytes());
+        bytes.extend_from_slice(&segment.opts);
+        bytes.extend_from_slice(&segment.payload);
+
+        bytes
+    }
+}
+
+impl From<&[u8]> for Segment {
+    fn from(buffer: &[u8]) -> Self {
+        let hlen_rsv_flags_word: u16 = u16::from_be_bytes([buffer[12], buffer[13]]);
+
+        let hlen_in_32bit_words: usize = (hlen_rsv_flags_word >> 12) as usize;
+        let hlen_in_bytes: usize = hlen_in_32bit_words * 4;
+        // Keep only 1st bit of 1st byte and all bits of second byte
+        let flags: u16 = hlen_rsv_flags_word & 0x01FF;
+
+        let segment: Self = Self {
+            src_port: u16::from_be_bytes([buffer[0], buffer[1]]),
+            dest_port: u16::from_be_bytes([buffer[2], buffer[3]]),
+            seq_num: u32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]),
+            ack_num: u32::from_be_bytes([buffer[8], buffer[9], buffer[10], buffer[11]]),
+            hlen: hlen_in_bytes,
+            flags: Flags(flags),
+            window: u16::from_be_bytes([buffer[14], buffer[15]]),
+            checksum: u16::from_be_bytes([buffer[16], buffer[17]]),
+            urgent_ptr: u16::from_be_bytes([buffer[18], buffer[19]]),
+            opts: buffer[20..hlen_in_bytes].to_vec(),
+            payload: buffer[hlen_in_bytes..].to_vec(),
+        };
+
+        segment
+    }
+}
+
+impl fmt::Display for Segment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "\nSource Port: {}", self.src_port);
+        write!(f, "\nDestination Port: {}", self.dest_port);
+        write!(f, "\nSequence Number: {}", self.seq_num);
+        write!(f, "\nAcknowledgment Number: {}", self.ack_num);
+        write!(
+            f,
+            "\nHeader Length: {} ({} bytes)",
+            self.hlen / 4,
+            self.hlen
+        );
+        write!(f, "\nFlags: {}", self.flags);
+        write!(f, "\nWindow: {}", self.window);
+        write!(f, "\nChecksum: {:X}", self.checksum);
+        write!(f, "\nUrgent Pointer: {:X}", self.urgent_ptr);
+        //TODO: Options parser
+        write!(f, "\nOptions: {:X?}", self.opts);
+        write!(f, "\nPayload: {:X?}", self.payload);
+
+        Ok(())
+    }
+}

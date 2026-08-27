@@ -4,57 +4,80 @@ use crate::net::com::{
 };
 use core::fmt;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Operation(u16);
+
+impl Operation {
+    pub const REQUEST: Self = Self(0x01);
+    pub const REPLY: Self = Self(0x02);
+
+    pub fn bits(self) -> u16 {
+        self.0
+    }
+}
+
+impl fmt::Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Operation::REQUEST => write!(f, "Request"),
+            Operation::REPLY => write!(f, "Reply"),
+            _ => write!(f, "Unknown Operation"),
+        }
+    }
+}
+
 pub struct Datagram {
     hardware_addr_family: AddressFamily,
     proto_addr_family: AddressFamily,
-    pub op: u16,
+    pub op: Operation,
     pub src_hardware_addr: [u8; 6],
     pub src_proto_addr: [u8; 4],
     pub dest_hardware_addr: [u8; 6],
     pub dest_proto_addr: [u8; 4],
     // TODO: Leave padding to Ethernet Frame
-    padding: Vec<u8>,
 }
 
 impl Datagram {
-    pub fn new_request(
+    pub fn new(
         hardware_addr_family: AddressFamily,
         proto_addr_family: AddressFamily,
+        operation: Operation,
         src_hardware_addr: [u8; 6],
         src_proto_addr: [u8; 4],
         dest_proto_addr: [u8; 4],
     ) -> Self {
-        let mut datagram = Self {
+        let datagram = Self {
             hardware_addr_family: hardware_addr_family,
             proto_addr_family: proto_addr_family,
-            op: 0x0001,
+            op: operation,
             src_hardware_addr: src_hardware_addr,
             src_proto_addr: src_proto_addr,
-            dest_hardware_addr: [0,0,0,0,0,0],
+            dest_hardware_addr: [0, 0, 0, 0, 0, 0],
             dest_proto_addr: dest_proto_addr,
-            padding: vec![],
         };
 
-        utils::fixed_size_header_padding(datagram.to_bytes().len(), 40, &mut datagram.padding);
         datagram
     }
-    pub fn to_bytes(&self) -> Vec<u8> {
+}
+
+impl From<Datagram> for Vec<u8> {
+    fn from(datagram: Datagram) -> Self {
         let mut bytes = Vec::new();
 
-        bytes.extend_from_slice(&self.hardware_addr_family.family_codepoint.to_be_bytes());
-        bytes.extend_from_slice(&self.proto_addr_family.family_codepoint.to_be_bytes());
-        bytes.push(self.hardware_addr_family.len);
-        bytes.push(self.proto_addr_family.len);
-        bytes.extend_from_slice(&self.op.to_be_bytes());
-        bytes.extend_from_slice(&self.src_hardware_addr);
-        bytes.extend_from_slice(&self.src_proto_addr);
-        bytes.extend_from_slice(&self.dest_hardware_addr);
-        bytes.extend_from_slice(&self.dest_proto_addr);
-        bytes.extend_from_slice(&self.padding);
+        bytes.extend_from_slice(&datagram.hardware_addr_family.family_codepoint.to_be_bytes());
+        bytes.extend_from_slice(&datagram.proto_addr_family.family_codepoint.to_be_bytes());
+        bytes.push(datagram.hardware_addr_family.len);
+        bytes.push(datagram.proto_addr_family.len);
+        bytes.extend_from_slice(&datagram.op.bits().to_be_bytes());
+        bytes.extend_from_slice(&datagram.src_hardware_addr);
+        bytes.extend_from_slice(&datagram.src_proto_addr);
+        bytes.extend_from_slice(&datagram.dest_hardware_addr);
+        bytes.extend_from_slice(&datagram.dest_proto_addr);
 
         bytes
     }
 }
+
 impl From<Vec<u8>> for Datagram {
     fn from(buffer: Vec<u8>) -> Self {
         let mut datagram = Self {
@@ -68,12 +91,11 @@ impl From<Vec<u8>> for Datagram {
                 buffer[2], buffer[3],
             ]))
             .unwrap(),
-            op: u16::from_be_bytes([buffer[6], buffer[7]]),
+            op: Operation(u16::from_be_bytes([buffer[6], buffer[7]])),
             src_hardware_addr: [0, 0, 0, 0, 0, 0],
             src_proto_addr: [0, 0, 0, 0],
             dest_hardware_addr: [0, 0, 0, 0, 0, 0],
             dest_proto_addr: [0, 0, 0, 0],
-            padding: buffer[28..].to_vec(),
         };
 
         datagram.src_hardware_addr.copy_from_slice(&buffer[8..14]);
@@ -85,48 +107,42 @@ impl From<Vec<u8>> for Datagram {
     }
 }
 impl fmt::Display for Datagram {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        println!(
-            "Hardware Address Type: {:04?} ({})",
-            self.hardware_addr_family.family_codepoint,
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f,
+            "\nHardware Address Type: {}",
             AddressFamily::name(&self.hardware_addr_family)
         );
-        println!(
-            "Protocol Address Type: {:04X?} ({})",
-            self.proto_addr_family.family_codepoint,
+        write!(f,
+            "\nProtocol Address Type: {}",
             AddressFamily::name(&self.proto_addr_family)
         );
-        println!(
-            "Hardware Address Length: {:02X?}",
+        write!(f,
+            "\nHardware Address Length: {:X}",
             self.hardware_addr_family.len
         );
-        println!(
-            "Protocol Address Length: {:02X?}",
+        write!(f,
+            "\nProtocol Address Length: {:X}",
             self.proto_addr_family.len
         );
 
-        match self.op {
-            0x0001 => println!("Operation: {:04?} ({})", self.op, "Request"),
-            0x0002 => println!("Operation: {:04?} ({})", self.op, "Reply"),
-            _ => println!("Unknown Operation"),
-        }
+        write!(f,"\nOperation: {}", self.op);
 
-        println!(
+        write!(f,
             "Source Hardware Address: {}",
             self.hardware_addr_family
                 .addr_to_string(self.src_hardware_addr.to_vec())
         );
-        println!(
+        write!(f,
             "Source Protocol Address: {}",
             self.proto_addr_family
                 .addr_to_string(self.src_proto_addr.to_vec())
         );
-        println!(
+        write!(f,
             "Destination Hardware Address: {}",
             self.hardware_addr_family
                 .addr_to_string(self.dest_hardware_addr.to_vec())
         );
-        println!(
+        write!(f,
             "Destination Protocol Address: {}",
             self.proto_addr_family
                 .addr_to_string(self.dest_proto_addr.to_vec())

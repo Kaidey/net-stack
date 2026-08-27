@@ -1,7 +1,7 @@
 use core::fmt;
 use std::ops::{BitOr, BitOrAssign};
 
-use crate::net::com::{AddressFamily, ethernet_payloads::utils};
+use crate::net::com::{AddressFamily, ethernet_payloads::{utils, tcp}};
 
 // TODO: Review. This might be a problem for multi-thread
 static mut NEXT_ID: u16 = 0;
@@ -17,11 +17,11 @@ pub struct Datagram {
     // In the struct, header length will be used as the total byte count instead of the 32-bit word
     // count for simplicity. Convertion will happen when transforming a struct instance into a byte
     // stream and when creating an instance from a byte stream
-    hlen: u8,
+    hlen: usize,
     dscp: Dscp,
     // TODO: Understand and impl
     ecn: u8,
-    total_len: u16,
+    total_len: usize,
     id: u16,
     flags: FragmentationFlags,
     fragment_offset: u16,
@@ -85,8 +85,8 @@ impl From<u8> for Dscp {
 }
 
 impl From<Dscp> for u8 {
-    fn from(value: Dscp) -> u8 {
-        value.0
+    fn from(dscp: Dscp) -> u8 {
+        dscp.0
     }
 }
 
@@ -155,8 +155,8 @@ impl From<u8> for FragmentationFlags {
 }
 
 impl From<FragmentationFlags> for u8 {
-    fn from(value: FragmentationFlags) -> Self {
-        value.0
+    fn from(flags: FragmentationFlags) -> Self {
+        flags.0
     }
 }
 
@@ -181,8 +181,8 @@ impl From<u8> for Protocol {
 }
 
 impl From<Protocol> for u8 {
-    fn from(value: Protocol) -> u8 {
-        value.0
+    fn from(protocol: Protocol) -> u8 {
+        protocol.0
     }
 }
 impl fmt::Display for Protocol {
@@ -209,8 +209,8 @@ impl Datagram {
         dest_addr: [u8; 4],
         payload: Vec<u8>,
     ) -> Result<Self, DatagramError> {
-        let default_hlen: u8 = 20;
-        let total_len = default_hlen as usize + payload.len();
+        let default_hlen: usize = 20;
+        let total_len: usize = default_hlen + payload.len();
 
         if total_len > u16::MAX as usize {
             return Err(DatagramError::PayloadTooLarge);
@@ -221,7 +221,7 @@ impl Datagram {
             hlen: default_hlen,
             dscp: Dscp::DEFAULT,
             ecn: 0,
-            total_len: total_len as u16,
+            total_len: total_len,
             id: next_datagram_id(),
             flags: FragmentationFlags::DONT_FRAGMENT,
             fragment_offset: 0,
@@ -258,7 +258,7 @@ impl Datagram {
     pub fn opts(mut self, opts: Vec<u8>) -> Result<Self, DatagramError> {
         self.opts = opts;
 
-        let post_opts_hlen = self.hlen as usize + self.opts.len();
+        let post_opts_hlen = self.hlen + self.opts.len();
 
         let post_padding_hlen = utils::byte_alignment_padding(post_opts_hlen, 4, &mut self.opts);
 
@@ -267,35 +267,32 @@ impl Datagram {
             return Err(DatagramError::HeaderTooLarge);
         }
 
-        self.hlen = post_padding_hlen as u8;
-        self.total_len = (post_padding_hlen + self.payload.len()) as u16;
+        self.hlen = post_padding_hlen;
+        self.total_len = post_padding_hlen + self.payload.len();
         Ok(self)
     }
+}
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+impl From<Datagram> for Vec<u8> {
+    fn from(datagram: Datagram) -> Vec<u8> {
         let mut bytes: Vec<u8> = Vec::new();
 
-        // TODO: Checksum solution only before setting up for wire
+        // TODO: Calc Checksum here only 
 
-        // Tho version and IHl are defined as u8 (because Rust doesn't have a type to accomodate
-        // less bits), those fields on a datagram actually share a byte (4 bits each). So, when
-        // serializing the datagram object we need to combine the two with a left shift + OR
-        bytes.push(self.version << 4 | self.hlen / 4);
-        bytes.push(self.dscp.bits() << 2 | self.ecn);
-        bytes.extend_from_slice(&self.total_len.to_be_bytes());
-        bytes.extend_from_slice(&self.id.to_be_bytes());
-        // Same thing as above, but here is a bit more awkward because flags is a 3 bit field while
-        // fragment_offset is a 13 bit field and they need to be combined into a 16 bit word
+        bytes.push(datagram.version << 4 | ((datagram.hlen / 4)) as u8);
+        bytes.push(datagram.dscp.bits() << 2 | datagram.ecn);
+        bytes.extend_from_slice(&(datagram.total_len as u16).to_be_bytes());
+        bytes.extend_from_slice(&datagram.id.to_be_bytes());
         bytes.extend_from_slice(
-            &((self.flags.bits() as u16) << 13 | self.fragment_offset).to_be_bytes(),
+            &((datagram.flags.bits() as u16) << 13 | datagram.fragment_offset).to_be_bytes(),
         );
-        bytes.push(self.ttl);
-        bytes.push(self.proto.bits() as u8);
-        bytes.extend_from_slice(&self.checksum.to_be_bytes());
-        bytes.extend_from_slice(&self.src_addr);
-        bytes.extend_from_slice(&self.dest_addr);
-        bytes.extend_from_slice(&self.opts);
-        bytes.extend_from_slice(&self.payload);
+        bytes.push(datagram.ttl);
+        bytes.push(datagram.proto.bits() as u8);
+        bytes.extend_from_slice(&datagram.checksum.to_be_bytes());
+        bytes.extend_from_slice(&datagram.src_addr);
+        bytes.extend_from_slice(&datagram.dest_addr);
+        bytes.extend_from_slice(&datagram.opts);
+        bytes.extend_from_slice(&datagram.payload);
 
         bytes
     }
@@ -303,15 +300,13 @@ impl Datagram {
 
 impl From<Vec<u8>> for Datagram {
     fn from(buffer: Vec<u8>) -> Self {
-        let hlen: u8 = buffer[0] & 0x0F;
-        let total_len: u16 = u16::from_be_bytes([buffer[2], buffer[3]]);
-        // Multiply hlen by 4 since header length is meased in 32-bit words (4 bytes)
-        // Convert to usize so we can use the result to index buffer
-        let payload_offset = (hlen * 4) as usize;
+        let hlen_in_32bit_words: usize = (buffer[0] & 0x0F) as usize;
+        let hlen_in_bytes: usize = hlen_in_32bit_words * 4;
+        let total_len: usize = u16::from_be_bytes([buffer[2], buffer[3]]) as usize;
 
         let mut datagram: Self = Self {
             version: buffer[0] >> 4,
-            hlen: hlen * 4,
+            hlen: hlen_in_bytes,
             dscp: Dscp(buffer[1] >> 2),
             ecn: buffer[1] & 0x03,
             total_len: total_len,
@@ -324,8 +319,8 @@ impl From<Vec<u8>> for Datagram {
             src_addr: [0, 0, 0, 0],
             dest_addr: [0, 0, 0, 0],
             // TODO: Option parser
-            opts: buffer[20..payload_offset].to_vec(),
-            payload: buffer[payload_offset..].to_vec(),
+            opts: buffer[20..hlen_in_bytes].to_vec(),
+            payload: buffer[hlen_in_bytes..].to_vec(),
         };
 
         datagram.src_addr.copy_from_slice(&buffer[12..16]);
@@ -337,10 +332,10 @@ impl From<Vec<u8>> for Datagram {
 
 impl fmt::Display for Datagram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "\nIP Protocol version: {:X}", self.version);
+        write!(f, "\nIP Protocol version: {}", self.version);
         write!(
             f,
-            "\nDatagram Header Length: {:X} ({} bytes)",
+            "\nDatagram Header Length: {} ({} bytes)",
             self.hlen / 4,
             self.hlen
         );
@@ -364,9 +359,13 @@ impl fmt::Display for Datagram {
         );
         // TODO: Option parser
         write!(f, "\nOptions: {:X?}", self.opts);
-        //TODO: Implement after TCP is ready
-        // println!("Payload")
-        write!(f, "\nPayload: {:X?}", self.payload);
+
+        match self.proto{
+            Protocol::TCP => write!(f, "\nPayload ({}): {}", self.proto, tcp::Segment::from(self.payload.as_slice())),
+            Protocol::ICMP => write!(f, "\nPayload ({}): NotImpl", self.proto),
+            Protocol::UDP => write!(f, "\nPayload ({}): NotImpl", self.proto),
+            _ => write!(f, "\nPayload ({}): {:X?}", self.proto, self.payload)
+        };
 
         Ok(())
     }

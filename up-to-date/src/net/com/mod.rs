@@ -188,12 +188,12 @@ impl AddressFamily {
 }
 
 pub fn run_arp(socket_fd: i32, src_mac: [u8; 6], src_ip: [u8; 4], dest_ip: [u8; 4]) -> Option<[u8; 6]> {
-    let arp_packet = arp::Datagram::new_request(
+    let arp_packet = arp::Datagram::new(
         AddressFamily::MAC,
         AddressFamily::IPV4,
+        arp::Operation::REQUEST,
         src_mac,
         src_ip,
-        [0, 0, 0, 0, 0, 0],
         dest_ip,
     );
 
@@ -201,7 +201,7 @@ pub fn run_arp(socket_fd: i32, src_mac: [u8; 6], src_ip: [u8; 4], dest_ip: [u8; 
         [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
         src_mac,
         FrameType::Arp.hex_value(),
-        arp_packet.to_bytes(),
+        arp_packet.into(),
     );
 
     let frame_as_bytes: Vec<u8> = eth_frame.to_bytes();
@@ -247,7 +247,7 @@ pub fn run_arp(socket_fd: i32, src_mac: [u8; 6], src_ip: [u8; 4], dest_ip: [u8; 
         let frame: EthernetFrame = EthernetFrame::from(buffer.to_vec());
         let is_arp: Datagram = Datagram::from(frame.data);
 
-        if is_arp.op == 0x0002 && is_arp.dest_hardware_addr == src_mac{
+        if is_arp.op == arp::Operation::REPLY && is_arp.dest_hardware_addr == src_mac{
             dest_mac = Some(is_arp.src_hardware_addr);
             break;
         }

@@ -3,7 +3,7 @@ mod socket;
 
 use com::ethernet_payloads::{arp, ipv4};
 
-use crate::net::com::{FrameType, run_arp};
+use crate::net::com::{FrameType, ethernet_payloads::tcp, run_arp};
 
 pub fn test() {
     // let sock_fd = socket::new_socket(Some("eth1"));
@@ -16,12 +16,16 @@ pub fn test() {
     // );
     //
     // println!("Destination MAC: {:02X?}", dest_mac.unwrap());
-    //
+
+    let tcp: tcp::Segment = tcp::Segment::new(1, 2, tcp::Flags::SYN, vec![1,2]);
+
+    println!("\nTCP\n\n: {}", tcp);
+
     let packet: ipv4::Datagram = ipv4::Datagram::new(
         ipv4::Protocol::TCP,
         [192, 168, 68, 1],
         [192, 172, 50, 1],
-        vec![1, 2],
+        tcp.into(),
     )
     .unwrap()
     .ttl(128)
@@ -33,7 +37,7 @@ pub fn test() {
 
     println!("{}", packet);
 
-    let packet_from = ipv4::Datagram::from(packet.to_bytes());
+    let packet_from = ipv4::Datagram::from(Vec::from(packet));
 
     println!("From: \n{}", packet_from);
 }
