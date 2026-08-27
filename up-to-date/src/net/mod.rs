@@ -18,17 +18,22 @@ pub fn test() {
     // println!("Destination MAC: {:02X?}", dest_mac.unwrap());
     //
     let packet: ipv4::Datagram = ipv4::Datagram::new(
-        ipv4::Protocol::ICMP,
+        ipv4::Protocol::TCP,
         [192, 168, 68, 1],
         [192, 172, 50, 1],
         vec![1, 2],
     )
+    .unwrap()
     .ttl(128)
-    .flags(ipv4::FragmentationFlags::FragMore)
+    .flags(ipv4::FragmentationFlags::MORE_FRAGMENTS)
     .fragment_offset(0xB1)
-    .opts(vec![9,8,2,5,5,4])
-    .tos(ipv4::dscp::DEFAULT_FORWARDING);
+    .opts(vec![9, 8, 2, 5, 5, 4])
+    .unwrap()
+    .dscp(ipv4::Dscp::AF21);
 
     println!("{}", packet);
 
+    let packet_from = ipv4::Datagram::from(packet.to_bytes());
+
+    println!("From: \n{}", packet_from);
 }

@@ -1,7 +1,9 @@
 use core::fmt;
+use std::ops::{BitOr, BitOrAssign};
 
 use crate::net::com::{AddressFamily, ethernet_payloads::utils};
 
+// TODO: Review. This might be a problem for multi-thread
 static mut NEXT_ID: u16 = 0;
 
 fn next_datagram_id() -> u16 {
@@ -16,7 +18,9 @@ pub struct Datagram {
     // count for simplicity. Convertion will happen when transforming a struct instance into a byte
     // stream and when creating an instance from a byte stream
     hlen: u8,
-    tos: u8,
+    dscp: Dscp,
+    // TODO: Understand and impl
+    ecn: u8,
     total_len: u16,
     id: u16,
     flags: FragmentationFlags,
@@ -31,143 +35,171 @@ pub struct Datagram {
 }
 
 // DSCP codepoints for Per-Hop Behaviour https://networklessons.com/quality-of-service/ip-precedence-dscp-values
-pub mod dscp {
-    use crate::net::com::ethernet_payloads::ipv4::dscp;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Dscp(u8);
 
+impl Dscp {
     // Modern DSCP values
-    pub const DEFAULT_FORWARDING: u8 = 0;
+    pub const DEFAULT: Self = Self(0x00);
 
-    pub const EXPEDITED_FORWARDING: u8 = 46;
+    pub const EXPEDITED_FORWARDING: Self = Self(0x2E);
 
-    pub const VOICE_ADMIT: u8 = 44;
+    pub const VOICE_ADMIT: Self = Self(0x2C);
 
-    // Each class is a different datagram queue and the priority assigned to datagrams in each queue is
+    // Each class (first digit) is a different datagram queue and the priority assigned to datagrams in each queue is
     // defined by device/network config
-    pub mod assured_forwarding {
-        pub const AF11: u8 = 10;
-        pub const AF12: u8 = 12;
-        pub const AF13: u8 = 14;
+    pub const AF11: Self = Self(0x0A);
+    pub const AF12: Self = Self(0x0C);
+    pub const AF13: Self = Self(0x0E);
 
-        pub const AF21: u8 = 18;
-        pub const AF22: u8 = 20;
-        pub const AF23: u8 = 22;
+    pub const AF21: Self = Self(0x12);
+    pub const AF22: Self = Self(0x14);
+    pub const AF23: Self = Self(0x16);
 
-        pub const AF31: u8 = 26;
-        pub const AF32: u8 = 28;
-        pub const AF33: u8 = 30;
+    pub const AF31: Self = Self(0x1A);
+    pub const AF32: Self = Self(0x1C);
+    pub const AF33: Self = Self(0x1E);
 
-        pub const AF41: u8 = 34;
-        pub const AF42: u8 = 36;
-        pub const AF43: u8 = 38;
-    }
+    pub const AF41: Self = Self(0x22);
+    pub const AF42: Self = Self(0x24);
+    pub const AF43: Self = Self(0x26);
 
     // For compatibility with old IP Precedence Type Of Service model
-    pub mod class_selector {
-        pub const CS0: u8 = 0;
-        pub const CS1: u8 = 8;
-        pub const CS2: u8 = 16;
-        pub const CS3: u8 = 24;
-        pub const CS4: u8 = 32;
-        pub const CS5: u8 = 40;
-        pub const CS6: u8 = 48;
-        pub const CS7: u8 = 56;
-    }
+    pub const CS1: Self = Self(0x08);
+    pub const CS2: Self = Self(0x10);
+    pub const CS3: Self = Self(0x18);
+    pub const CS4: Self = Self(0x20);
+    pub const CS5: Self = Self(0x28);
+    pub const CS6: Self = Self(0x30);
+    pub const CS7: Self = Self(0x38);
 
-    // TODO: Change to impl Display
-    pub fn to_string(dscp_value: u8) -> &'static str {
-        match dscp_value {
-            dscp::DEFAULT_FORWARDING => "Default",
-            dscp::EXPEDITED_FORWARDING => "Expedite Forwarding",
-            dscp::VOICE_ADMIT => "Voice Admit",
-            dscp::assured_forwarding::AF11 => "Assured Forwarding Class 1 Low-Drop",
-            dscp::assured_forwarding::AF12 => "Assured Forwarding Class 1 Medium-Drop",
-            dscp::assured_forwarding::AF13 => "Assured Forwarding Class 1 High-Drop",
-            dscp::assured_forwarding::AF21 => "Assured Forwarding Class 2 Low-Drop",
-            dscp::assured_forwarding::AF22 => "Assured Forwarding Class 2 Medium-Drop",
-            dscp::assured_forwarding::AF23 => "Assured Forwarding Class 2 High-Drop",
-            dscp::assured_forwarding::AF31 => "Assured Forwarding Class 3 Low-Drop",
-            dscp::assured_forwarding::AF32 => "Assured Forwarding Class 3 Medium-Drop",
-            dscp::assured_forwarding::AF33 => "Assured Forwarding Class 3 High-Drop",
-            dscp::assured_forwarding::AF41 => "Assured Forwarding Class 4 Low-Drop",
-            dscp::assured_forwarding::AF42 => "Assured Forwarding Class 4 Medium-Drop",
-            dscp::assured_forwarding::AF43 => "Assured Forwarding Class 4 High-Drop",
-            dscp::class_selector::CS1 => "Class Selector Priority",
-            dscp::class_selector::CS2 => "Class Selector Immediate",
-            dscp::class_selector::CS3 => "Class Selector Flash",
-            dscp::class_selector::CS4 => "Class Selector Flash Override",
-            dscp::class_selector::CS5 => "Class Selector Critic/Critical",
-            dscp::class_selector::CS6 => "Class Selector Internetwork Control",
-            dscp::class_selector::CS7 => "Class Selector Network Control",
-            _ => "Unknown DSCP value",
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for Dscp {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Dscp> for u8 {
+    fn from(value: Dscp) -> u8 {
+        value.0
+    }
+}
+
+impl fmt::Display for Dscp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Dscp::DEFAULT => write!(f, "Default"),
+            Dscp::EXPEDITED_FORWARDING => write!(f, "Expedite Forwarding"),
+            Dscp::VOICE_ADMIT => write!(f, "Voice Admit"),
+            Dscp::AF11 => write!(f, "Assured Forwarding Class 1 Low-Drop"),
+            Dscp::AF12 => write!(f, "Assured Forwarding Class 1 Medium-Drop"),
+            Dscp::AF13 => write!(f, "Assured Forwarding Class 1 High-Drop"),
+            Dscp::AF21 => write!(f, "Assured Forwarding Class 2 Low-Drop"),
+            Dscp::AF22 => write!(f, "Assured Forwarding Class 2 Medium-Drop"),
+            Dscp::AF23 => write!(f, "Assured Forwarding Class 2 High-Drop"),
+            Dscp::AF31 => write!(f, "Assured Forwarding Class 3 Low-Drop"),
+            Dscp::AF32 => write!(f, "Assured Forwarding Class 3 Medium-Drop"),
+            Dscp::AF33 => write!(f, "Assured Forwarding Class 3 High-Drop"),
+            Dscp::AF41 => write!(f, "Assured Forwarding Class 4 Low-Drop"),
+            Dscp::AF42 => write!(f, "Assured Forwarding Class 4 Medium-Drop"),
+            Dscp::AF43 => write!(f, "Assured Forwarding Class 4 High-Drop"),
+            Dscp::CS1 => write!(f, "Class Selector Priority"),
+            Dscp::CS2 => write!(f, "Class Selector Immediate"),
+            Dscp::CS3 => write!(f, "Class Selector Flash"),
+            Dscp::CS4 => write!(f, "Class Selector Flash Override"),
+            Dscp::CS5 => write!(f, "Class Selector Critic/Critical"),
+            Dscp::CS6 => write!(f, "Class Selector Internetwork Control"),
+            Dscp::CS7 => write!(f, "Class Selector Network Control"),
+            _ => write!(f, "Unknown DSCP value"),
         }
     }
 }
-#[derive(Clone, Copy)]
-pub enum FragmentationFlags {
-    FragLast = 0,
-    FragMore = 1,
-    NoFragLast = 2,
-    NoFragMore = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FragmentationFlags(u8);
 
 impl FragmentationFlags {
-    // TODO: Change to impl Display
-    pub fn to_string(self) -> &'static str {
-        match self {
-            FragmentationFlags::FragLast => "Fragmentation Enabled, Last Fragment",
-            FragmentationFlags::FragMore => "Fragmentation Enabled, More Fragments",
-            FragmentationFlags::NoFragLast | FragmentationFlags::NoFragMore => {
-                "Fragmentation Disabled"
+    pub const LAST_FRAGMENT: Self = Self(0x0);
+    pub const MORE_FRAGMENTS: Self = Self(0x1);
+    pub const DONT_FRAGMENT: Self = Self(0x2);
+    pub const DONT_FRAGMEMT_MORE: Self = Self(0x3);
+
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+}
+
+impl fmt::Display for FragmentationFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            FragmentationFlags::LAST_FRAGMENT => write!(f, "Fragmentation Enabled, Last Fragment"),
+            FragmentationFlags::MORE_FRAGMENTS => {
+                write!(f, "Fragmentation Enabled, More Fragments")
             }
+            FragmentationFlags::DONT_FRAGMENT | FragmentationFlags::DONT_FRAGMEMT_MORE => {
+                write!(f, "Fragmentation Disabled")
+            }
+            _ => write!(f, "Unknown Fragmentation Flag"),
         }
     }
 }
 
 impl From<u8> for FragmentationFlags {
-    fn from(flags: u8) -> Self {
-        match flags {
-            flags if flags == FragmentationFlags::FragMore as u8 => FragmentationFlags::FragLast,
-            flags if flags == FragmentationFlags::FragLast as u8 => FragmentationFlags::FragLast,
-            flags if flags == FragmentationFlags::NoFragMore as u8 => {
-                FragmentationFlags::NoFragMore
-            }
-            flags if flags == FragmentationFlags::NoFragLast as u8 => {
-                FragmentationFlags::NoFragLast
-            }
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
 
-            _ => panic!("Invalid Fragmentation Flags: {}", flags),
-        }
+impl From<FragmentationFlags> for u8 {
+    fn from(value: FragmentationFlags) -> Self {
+        value.0
     }
 }
 
 // TODO: Move out since it's not specific to IPv4
-#[derive(Clone, Copy)]
-pub enum Protocol {
-    ICMP = 1,
-    TCP = 6,
-    UDP = 17,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Protocol(u8);
 
 impl Protocol {
-    // TODO: Change to impl Display
-    pub fn to_string(&self) -> &'static str {
-        match self {
-            Protocol::ICMP => "ICMP",
-            Protocol::TCP => "TCP",
-            Protocol::UDP => "UDP",
-        }
+    pub const ICMP: Self = Self(0x01);
+    pub const TCP: Self = Self(0x06);
+    pub const UDP: Self = Self(0x11);
+
+    pub fn bits(self) -> u8 {
+        self.0
     }
 }
 
 impl From<u8> for Protocol {
-    fn from(proto: u8) -> Self {
-        match proto {
-            proto if proto == Protocol::ICMP as u8 => Protocol::ICMP,
-            proto if proto == Protocol::TCP as u8 => Protocol::TCP,
-            proto if proto == Protocol::UDP as u8 => Protocol::UDP,
-            _ => panic!("Unknown protocol: {}", proto),
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Protocol> for u8 {
+    fn from(value: Protocol) -> u8 {
+        value.0
+    }
+}
+impl fmt::Display for Protocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Protocol::ICMP => write!(f, "ICMP"),
+            Protocol::TCP => write!(f, "TCP"),
+            Protocol::UDP => write!(f, "UDP"),
+            _ => write!(f, "Unknown Protocol"),
         }
     }
+}
+
+#[derive(Debug)]
+pub enum DatagramError {
+    PayloadTooLarge,
+    HeaderTooLarge,
 }
 
 impl Datagram {
@@ -176,17 +208,22 @@ impl Datagram {
         src_addr: [u8; 4],
         dest_addr: [u8; 4],
         payload: Vec<u8>,
-    ) -> Self {
+    ) -> Result<Self, DatagramError> {
         let default_hlen: u8 = 20;
-        let default_total_len: u16 = (default_hlen as usize + payload.len()) as u16;
+        let total_len = default_hlen as usize + payload.len();
 
-        let mut datagram: Self = Self {
+        if total_len > u16::MAX as usize {
+            return Err(DatagramError::PayloadTooLarge);
+        }
+
+        Ok(Self {
             version: 4,
             hlen: default_hlen,
-            tos: dscp::DEFAULT_FORWARDING,
-            total_len: default_total_len,
+            dscp: Dscp::DEFAULT,
+            ecn: 0,
+            total_len: total_len as u16,
             id: next_datagram_id(),
-            flags: FragmentationFlags::NoFragLast,
+            flags: FragmentationFlags::DONT_FRAGMENT,
             fragment_offset: 0,
             ttl: 128, // recommended defaults are 64 (Linux), 128 (Win), 255 (Net devices)
             proto: protocol,
@@ -195,15 +232,11 @@ impl Datagram {
             dest_addr: dest_addr,
             opts: vec![],
             payload: payload,
-        };
-
-        datagram.checksum = utils::calc_checksum(&datagram.to_bytes()[0..default_hlen as usize]);
-
-        return datagram;
+        })
     }
 
-    pub fn tos(mut self, tos: u8) -> Self {
-        self.tos = tos;
+    pub fn dscp(mut self, dscp: Dscp) -> Self {
+        self.dscp = dscp;
         self
     }
 
@@ -222,48 +255,56 @@ impl Datagram {
         self
     }
 
-    pub fn opts(mut self, opts: Vec<u8>) -> Self {
+    pub fn opts(mut self, opts: Vec<u8>) -> Result<Self, DatagramError> {
         self.opts = opts;
 
         let post_opts_hlen = self.hlen as usize + self.opts.len();
 
         let post_padding_hlen = utils::byte_alignment_padding(post_opts_hlen, 4, &mut self.opts);
 
+        // Header length is a 4 bit field so max value for the field is 15 -> 15 * 4 = 60 bytes
+        if post_padding_hlen > 60 {
+            return Err(DatagramError::HeaderTooLarge);
+        }
+
         self.hlen = post_padding_hlen as u8;
         self.total_len = (post_padding_hlen + self.payload.len()) as u16;
-        self.checksum = utils::calc_checksum(&self.to_bytes()[0..post_padding_hlen]);
-        self
+        Ok(self)
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes: Vec<u8> = Vec::new();
 
+        // TODO: Checksum solution only before setting up for wire
+
         // Tho version and IHl are defined as u8 (because Rust doesn't have a type to accomodate
         // less bits), those fields on a datagram actually share a byte (4 bits each). So, when
         // serializing the datagram object we need to combine the two with a left shift + OR
         bytes.push(self.version << 4 | self.hlen / 4);
-        bytes.push(self.tos);
+        bytes.push(self.dscp.bits() << 2 | self.ecn);
         bytes.extend_from_slice(&self.total_len.to_be_bytes());
         bytes.extend_from_slice(&self.id.to_be_bytes());
         // Same thing as above, but here is a bit more awkward because flags is a 3 bit field while
         // fragment_offset is a 13 bit field and they need to be combined into a 16 bit word
-        bytes.extend_from_slice(&((self.flags as u16) << 13 | self.fragment_offset).to_be_bytes());
+        bytes.extend_from_slice(
+            &((self.flags.bits() as u16) << 13 | self.fragment_offset).to_be_bytes(),
+        );
         bytes.push(self.ttl);
-        bytes.push(self.proto as u8);
+        bytes.push(self.proto.bits() as u8);
         bytes.extend_from_slice(&self.checksum.to_be_bytes());
         bytes.extend_from_slice(&self.src_addr);
         bytes.extend_from_slice(&self.dest_addr);
         bytes.extend_from_slice(&self.opts);
         bytes.extend_from_slice(&self.payload);
 
-        return bytes;
+        bytes
     }
 }
 
 impl From<Vec<u8>> for Datagram {
     fn from(buffer: Vec<u8>) -> Self {
-        let hlen: u8 = (buffer[0] << 4) >> 4;
-        let total_len: u16 = (buffer[2] as u16) << 8 | buffer[3] as u16;
+        let hlen: u8 = buffer[0] & 0x0F;
+        let total_len: u16 = u16::from_be_bytes([buffer[2], buffer[3]]);
         // Multiply hlen by 4 since header length is meased in 32-bit words (4 bytes)
         // Convert to usize so we can use the result to index buffer
         let payload_offset = (hlen * 4) as usize;
@@ -271,14 +312,15 @@ impl From<Vec<u8>> for Datagram {
         let mut datagram: Self = Self {
             version: buffer[0] >> 4,
             hlen: hlen * 4,
-            tos: buffer[1],
+            dscp: Dscp(buffer[1] >> 2),
+            ecn: buffer[1] & 0x03,
             total_len: total_len,
-            id: (buffer[4] as u16) << 8 | buffer[5] as u16,
+            id: u16::from_be_bytes([buffer[4], buffer[5]]),
             flags: FragmentationFlags::from(buffer[6] >> 5), // 3 most significant bits
-            fragment_offset: ((buffer[6] << 3) >> 3) as u16 | buffer[7] as u16,
+            fragment_offset: u16::from_be_bytes([buffer[6] & 0x1F, buffer[7]]),
             ttl: buffer[8],
             proto: Protocol::from(buffer[9]),
-            checksum: (buffer[10] as u16) << 8 | buffer[11] as u16,
+            checksum: u16::from_be_bytes([buffer[10], buffer[11]]),
             src_addr: [0, 0, 0, 0],
             dest_addr: [0, 0, 0, 0],
             // TODO: Option parser
@@ -294,36 +336,39 @@ impl From<Vec<u8>> for Datagram {
 }
 
 impl fmt::Display for Datagram {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        println!("IP Protocol version: {:X}", self.version);
-        println!(
-            "Datagram Header Length: {:X} ({} bytes)",
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\nIP Protocol version: {:X}", self.version);
+        write!(
+            f,
+            "\nDatagram Header Length: {:X} ({} bytes)",
             self.hlen / 4,
             self.hlen
         );
-        println!("Type Of Service (DSCP): {}", dscp::to_string(self.tos));
-        println!("Total Datagram Length: {}", self.total_len);
-        println!("ID: {:04X}", self.id);
-        println!("Fragmentation Flag: {}", self.flags.to_string());
-        println!("Fragment Offset: {:02X}", self.fragment_offset);
-        println!("Time To Live: {}", self.ttl);
-        println!("Next Level Protocol: {}", self.proto.to_string());
-        println!("Checksum: {:04X}", self.checksum);
-        println!(
-            "Source Address: {}",
+        write!(f, "\nType Of Service (DSCP): {}", self.dscp);
+        write!(f, "\nTotal Datagram Length: {}", self.total_len);
+        write!(f, "\nID: {:04X}", self.id);
+        write!(f, "\nFragmentation Flag: {}", self.flags);
+        write!(f, "\nFragment Offset: {:02X}", self.fragment_offset);
+        write!(f, "\nTime To Live: {}", self.ttl);
+        write!(f, "\nNext Level Protocol: {}", self.proto);
+        write!(f, "\nChecksum: {:04X}", self.checksum);
+        write!(
+            f,
+            "\nSource Address: {}",
             AddressFamily::IPV4.addr_to_string(self.src_addr.to_vec())
         );
-        println!(
-            "Destination Address: {}",
+        write!(
+            f,
+            "\nDestination Address: {}",
             AddressFamily::IPV4.addr_to_string(self.dest_addr.to_vec())
         );
         // TODO: Option parser
-        println!("Options: {:X?}", self.opts);
+        write!(f, "\nOptions: {:X?}", self.opts);
         //TODO: Implement after TCP is ready
         // println!("Payload")
-        println!("Payload: {:X?}", self.payload);
+        write!(f, "\nPayload: {:X?}", self.payload);
 
-        Result::Ok(())
+        Ok(())
     }
 }
 // TODO: Fragmentation

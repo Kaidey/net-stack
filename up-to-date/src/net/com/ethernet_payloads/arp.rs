@@ -12,6 +12,7 @@ pub struct Datagram {
     pub src_proto_addr: [u8; 4],
     pub dest_hardware_addr: [u8; 6],
     pub dest_proto_addr: [u8; 4],
+    // TODO: Leave padding to Ethernet Frame
     padding: Vec<u8>,
 }
 
@@ -21,7 +22,6 @@ impl Datagram {
         proto_addr_family: AddressFamily,
         src_hardware_addr: [u8; 6],
         src_proto_addr: [u8; 4],
-        dest_hardware_addr: [u8; 6],
         dest_proto_addr: [u8; 4],
     ) -> Self {
         let mut datagram = Self {
@@ -30,7 +30,7 @@ impl Datagram {
             op: 0x0001,
             src_hardware_addr: src_hardware_addr,
             src_proto_addr: src_proto_addr,
-            dest_hardware_addr: dest_hardware_addr,
+            dest_hardware_addr: [0,0,0,0,0,0],
             dest_proto_addr: dest_proto_addr,
             padding: vec![],
         };
@@ -60,15 +60,15 @@ impl From<Vec<u8>> for Datagram {
         let mut datagram = Self {
             // Combines the first 2 u8 of buffer into a u16 by casting the first u8 to u16 and then
             // shifting it 8 bits left. Finally, performs an OR with the second u8
-            hardware_addr_family: AddressFamily::from_family_codepoint(
-                ((buffer[0] as u16) << 8) | buffer[1] as u16,
-            )
+            hardware_addr_family: AddressFamily::from_family_codepoint(u16::from_be_bytes([
+                buffer[0], buffer[1],
+            ]))
             .unwrap(),
-            proto_addr_family: AddressFamily::from_family_codepoint(
-                ((buffer[2] as u16) << 8) | buffer[3] as u16,
-            )
+            proto_addr_family: AddressFamily::from_family_codepoint(u16::from_be_bytes([
+                buffer[2], buffer[3],
+            ]))
             .unwrap(),
-            op: (buffer[6] as u16) << 8 | buffer[7] as u16,
+            op: u16::from_be_bytes([buffer[6], buffer[7]]),
             src_hardware_addr: [0, 0, 0, 0, 0, 0],
             src_proto_addr: [0, 0, 0, 0],
             dest_hardware_addr: [0, 0, 0, 0, 0, 0],
