@@ -165,19 +165,56 @@ impl Segment {
 
     // Generate the Initial Sequence Number
     // TODO
-    fn gen_seq_num() -> u32 {
+    pub fn gen_seq_num() -> u32 {
         0
+        // ISN = M + F(src_ip, srp_port, dest_ip, dest_port, secret)
+        // M = TCP Clock, +1 every 4ms
+        // F = PRF of the connection
+        // secret length -> min 128 bits
+        // The secret should be rotated:
+        //   - On stack start-up, with the system timer as a seed
+        //   - After a given time has expired
+        //   - Max amount of usages exceeded
+        // When rotating the secret, ISN space changes so colision could happen. Guard aggainst
+        // this
+    }
+
+    pub fn checksum(mut self, src_ip: &[u8], dest_ip: &[u8], proto: u8) -> Self {
+        let mut bytes_for_checksum: Vec<u8> = Vec::new();
+
+        let segment_as_bytes: Vec<u8> = Vec::from(&self);
+
+        // Pseudo-header
+        bytes_for_checksum.extend_from_slice(src_ip);
+        bytes_for_checksum.extend_from_slice(dest_ip);
+        bytes_for_checksum.push(0x00);
+        bytes_for_checksum.push(proto);
+        bytes_for_checksum.extend_from_slice(&(segment_as_bytes.len() as u16).to_be_bytes());
+
+        // Segment Header + Payload
+        bytes_for_checksum.extend_from_slice(&segment_as_bytes);
+
+        // Non-transmit padding to make total amount of bytes even if it is odd
+        // This is required because checksum is a 2-byte field and thus the calculation iterates
+        // the byte array 2 bytes at a time
+        if bytes_for_checksum.len() % 2 != 0 {
+            bytes_for_checksum.push(0x00);
+        }
+
+        let checksum: u16 = utils::calc_checksum(&bytes_for_checksum);
+
+        self.checksum = checksum;
+
+        self
     }
 }
 
-impl From<Segment> for Vec<u8> {
-    fn from(segment: Segment) -> Self {
+impl From<&Segment> for Vec<u8> {
+    fn from(segment: &Segment) -> Self {
         let mut bytes: Vec<u8> = Vec::new();
 
         // Divide hlen by 4 since header length field is calculated in 32-bit words
         let hlen_and_flags: u16 = ((segment.hlen / 4) as u16) << 12 | segment.flags.bits();
-
-        // TODO: Calc Checksum here only
 
         bytes.extend_from_slice(&segment.src_port.to_be_bytes());
         bytes.extend_from_slice(&segment.dest_port.to_be_bytes());
@@ -223,23 +260,23 @@ impl From<&[u8]> for Segment {
 
 impl fmt::Display for Segment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "\nSource Port: {}", self.src_port);
-        write!(f, "\nDestination Port: {}", self.dest_port);
-        write!(f, "\nSequence Number: {}", self.seq_num);
-        write!(f, "\nAcknowledgment Number: {}", self.ack_num);
+        write!(f, "\nSource Port: {}", self.src_port)?;
+        write!(f, "\nDestination Port: {}", self.dest_port)?;
+        write!(f, "\nSequence Number: {}", self.seq_num)?;
+        write!(f, "\nAcknowledgment Number: {}", self.ack_num)?;
         write!(
             f,
             "\nHeader Length: {} ({} bytes)",
             self.hlen / 4,
             self.hlen
-        );
-        write!(f, "\nFlags: {}", self.flags);
-        write!(f, "\nWindow: {}", self.window);
-        write!(f, "\nChecksum: {:X}", self.checksum);
-        write!(f, "\nUrgent Pointer: {:X}", self.urgent_ptr);
+        )?;
+        write!(f, "\nFlags: {}", self.flags)?;
+        write!(f, "\nWindow: {}", self.window)?;
+        write!(f, "\nChecksum: {:X}", self.checksum)?;
+        write!(f, "\nUrgent Pointer: {:X}", self.urgent_ptr)?;
         //TODO: Options parser
-        write!(f, "\nOptions: {:X?}", self.opts);
-        write!(f, "\nPayload: {:X?}", self.payload);
+        write!(f, "\nOptions: {:X?}", self.opts)?;
+        write!(f, "\nPayload: {:X?}", self.payload)?;
 
         Ok(())
     }

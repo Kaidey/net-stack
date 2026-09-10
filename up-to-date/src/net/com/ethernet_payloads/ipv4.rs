@@ -1,7 +1,10 @@
 use core::fmt;
 use std::ops::{BitOr, BitOrAssign};
 
-use crate::net::com::{AddressFamily, ethernet_payloads::{utils, tcp}};
+use crate::net::com::{
+    AddressFamily,
+    ethernet_payloads::{tcp, utils},
+};
 
 // TODO: Review. This might be a problem for multi-thread
 static mut NEXT_ID: u16 = 0;
@@ -271,15 +274,25 @@ impl Datagram {
         self.total_len = post_padding_hlen + self.payload.len();
         Ok(self)
     }
+
+    pub fn checksum(mut self) -> Self {
+
+        let datagram_as_bytes: Vec<u8> = Vec::from(&self);
+
+        let checksum: u16 = utils::calc_checksum(&datagram_as_bytes[..self.hlen]);
+
+        self.checksum = checksum;
+
+        self
+    }
 }
 
-impl From<Datagram> for Vec<u8> {
-    fn from(datagram: Datagram) -> Vec<u8> {
+// No need to consume the Datagram instance for serialization, so we impl for borrow
+impl From<&Datagram> for Vec<u8> {
+    fn from(datagram: &Datagram) -> Vec<u8> {
         let mut bytes: Vec<u8> = Vec::new();
 
-        // TODO: Calc Checksum here only 
-
-        bytes.push(datagram.version << 4 | ((datagram.hlen / 4)) as u8);
+        bytes.push(datagram.version << 4 | (datagram.hlen / 4) as u8);
         bytes.push(datagram.dscp.bits() << 2 | datagram.ecn);
         bytes.extend_from_slice(&(datagram.total_len as u16).to_be_bytes());
         bytes.extend_from_slice(&datagram.id.to_be_bytes());
@@ -298,8 +311,8 @@ impl From<Datagram> for Vec<u8> {
     }
 }
 
-impl From<Vec<u8>> for Datagram {
-    fn from(buffer: Vec<u8>) -> Self {
+impl From<&[u8]> for Datagram {
+    fn from(buffer: &[u8]) -> Self {
         let hlen_in_32bit_words: usize = (buffer[0] & 0x0F) as usize;
         let hlen_in_bytes: usize = hlen_in_32bit_words * 4;
         let total_len: usize = u16::from_be_bytes([buffer[2], buffer[3]]) as usize;
@@ -332,40 +345,45 @@ impl From<Vec<u8>> for Datagram {
 
 impl fmt::Display for Datagram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "\nIP Protocol version: {}", self.version);
+        write!(f, "\nIP Protocol version: {}", self.version)?;
         write!(
             f,
             "\nDatagram Header Length: {} ({} bytes)",
             self.hlen / 4,
             self.hlen
-        );
-        write!(f, "\nType Of Service (DSCP): {}", self.dscp);
-        write!(f, "\nTotal Datagram Length: {}", self.total_len);
-        write!(f, "\nID: {:04X}", self.id);
-        write!(f, "\nFragmentation Flag: {}", self.flags);
-        write!(f, "\nFragment Offset: {:02X}", self.fragment_offset);
-        write!(f, "\nTime To Live: {}", self.ttl);
-        write!(f, "\nNext Level Protocol: {}", self.proto);
-        write!(f, "\nChecksum: {:04X}", self.checksum);
+        )?;
+        write!(f, "\nType Of Service (DSCP): {}", self.dscp)?;
+        write!(f, "\nTotal Datagram Length: {}", self.total_len)?;
+        write!(f, "\nID: {:04X}", self.id)?;
+        write!(f, "\nFragmentation Flag: {}", self.flags)?;
+        write!(f, "\nFragment Offset: {:02X}", self.fragment_offset)?;
+        write!(f, "\nTime To Live: {}", self.ttl)?;
+        write!(f, "\nNext Level Protocol: {}", self.proto)?;
+        write!(f, "\nChecksum: {:04X}", self.checksum)?;
         write!(
             f,
             "\nSource Address: {}",
             AddressFamily::IPV4.addr_to_string(self.src_addr.to_vec())
-        );
+        )?;
         write!(
             f,
             "\nDestination Address: {}",
             AddressFamily::IPV4.addr_to_string(self.dest_addr.to_vec())
-        );
+        )?;
         // TODO: Option parser
-        write!(f, "\nOptions: {:X?}", self.opts);
+        write!(f, "\nOptions: {:X?}", self.opts)?;
 
-        match self.proto{
-            Protocol::TCP => write!(f, "\nPayload ({}): {}", self.proto, tcp::Segment::from(self.payload.as_slice())),
-            Protocol::ICMP => write!(f, "\nPayload ({}): NotImpl", self.proto),
-            Protocol::UDP => write!(f, "\nPayload ({}): NotImpl", self.proto),
-            _ => write!(f, "\nPayload ({}): {:X?}", self.proto, self.payload)
-        };
+        match self.proto {
+            Protocol::TCP => write!(
+                f,
+                "\nPayload ({}): {}",
+                self.proto,
+                tcp::Segment::from(self.payload.as_slice())
+            )?,
+            Protocol::ICMP => write!(f, "\nPayload ({}): NotImpl", self.proto)?,
+            Protocol::UDP => write!(f, "\nPayload ({}): NotImpl", self.proto)?,
+            _ => write!(f, "\nPayload ({}): {:X?}", self.proto, self.payload)?,
+        }
 
         Ok(())
     }

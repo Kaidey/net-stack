@@ -1,5 +1,6 @@
 mod net;
 mod os;
+mod crypto;
 
 fn main() {
     net::test();

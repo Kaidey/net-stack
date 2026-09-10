@@ -22,14 +22,14 @@ pub fn fixed_size_header_padding(header_len: usize, target_len: usize, padding_v
     }
 }
 
-pub fn calc_checksum(header_bytes: &[u8]) -> u16 {
+pub fn calc_checksum(byte_array: &[u8]) -> u16 {
     let mut count = 0;
     let mut sum: u32 = 0;
 
     // Calculate sum of every 16 bit word on the datagram header
-    while count < header_bytes.len() {
+    while count < byte_array.len() {
         // Combine 2 bytes into a 16 bit word
-        let next_16bit_word = ((header_bytes[count] as u16) << 8) | header_bytes[count + 1] as u16;
+        let next_16bit_word = ((byte_array[count] as u16) << 8) | byte_array[count + 1] as u16;
 
         sum = sum + next_16bit_word as u32;
         count = count + 2;

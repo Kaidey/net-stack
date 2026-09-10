@@ -108,45 +108,53 @@ impl From<Vec<u8>> for Datagram {
 }
 impl fmt::Display for Datagram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f,
+        write!(
+            f,
             "\nHardware Address Type: {}",
             AddressFamily::name(&self.hardware_addr_family)
-        );
-        write!(f,
+        )?;
+        write!(
+            f,
             "\nProtocol Address Type: {}",
             AddressFamily::name(&self.proto_addr_family)
-        );
-        write!(f,
+        )?;
+        write!(
+            f,
             "\nHardware Address Length: {:X}",
             self.hardware_addr_family.len
-        );
-        write!(f,
+        )?;
+        write!(
+            f,
             "\nProtocol Address Length: {:X}",
             self.proto_addr_family.len
-        );
+        )?;
 
-        write!(f,"\nOperation: {}", self.op);
+        write!(f, "\nOperation: {}", self.op)?;
 
-        write!(f,
+        write!(
+            f,
             "Source Hardware Address: {}",
             self.hardware_addr_family
                 .addr_to_string(self.src_hardware_addr.to_vec())
-        );
-        write!(f,
+        )?;
+        write!(
+            f,
             "Source Protocol Address: {}",
             self.proto_addr_family
                 .addr_to_string(self.src_proto_addr.to_vec())
-        );
-        write!(f,
+        )?;
+        write!(
+            f,
             "Destination Hardware Address: {}",
             self.hardware_addr_family
                 .addr_to_string(self.dest_hardware_addr.to_vec())
-        );
-        write!(f,
+        )?;
+        write!(
+            f,
             "Destination Protocol Address: {}",
             self.proto_addr_family
                 .addr_to_string(self.dest_proto_addr.to_vec())
-        );
+        )?;
 
         Result::Ok(())
     }
