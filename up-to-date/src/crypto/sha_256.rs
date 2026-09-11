@@ -1,7 +1,11 @@
+use crate::crypto::HashDigest;
+
+use super::Hasher;
 use core::fmt;
 use std::f64;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct Sha256;
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Sha256Digest([u8; 32]);
 
 impl fmt::Display for Sha256Digest {
@@ -13,7 +17,32 @@ impl fmt::Display for Sha256Digest {
     }
 }
 
-pub fn hash(message: &[u8]) -> Sha256Digest {
+impl HashDigest for Sha256Digest{
+    type Primitive = u32;
+}
+
+impl From<Sha256Digest> for Vec<u8> {
+    fn from(digest: Sha256Digest) -> Self {
+        digest.0.to_vec()
+    }
+}
+
+impl From<Sha256Digest> for u32 {
+    fn from(digest: Sha256Digest) -> Self {
+        u32::from_be_bytes([digest.0[0], digest.0[1], digest.0[2], digest.0[3]])
+    }
+}
+
+impl Hasher for Sha256 {
+    type Digest = Sha256Digest;
+    const BLOCK_SIZE: usize = 64;
+
+    fn hash(message: &[u8]) -> Self::Digest {
+        sha256(message)
+    }
+}
+
+fn sha256(message: &[u8]) -> Sha256Digest {
     // 1) Create padded message block, which needs a total amount of bits divisible by 512 or a
     //    total amount of bytes divisible by 64 in this implementation
 
@@ -74,7 +103,7 @@ pub fn hash(message: &[u8]) -> Sha256Digest {
         }
     }
     // 5) Convert final digest to byte array (32-bit word -> 4 bytes)
-    let mut digest: [u8; 32] = [0; 32];
+    let mut digest = [0; 32];
     for (i, word) in hash_values.iter().enumerate() {
         let first_byte = i * 4;
         let last_byte = first_byte + 4;

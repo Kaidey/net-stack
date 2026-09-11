@@ -1,23 +1,35 @@
-use crate::net::com::ethernet_payloads::utils;
+use crate::{
+    crypto,
+    net::com::ethernet_payloads::utils,
+};
 use core::fmt;
-use std::ops::{BitOr, BitOrAssign};
+use std::{
+    ops::{BitOr, BitOrAssign},
+    sync::LazyLock,
+    time::Instant,
+};
 
-pub struct Segment {
-    src_port: u16,
-    dest_port: u16,
-    seq_num: u32,
-    ack_num: u32,
-    // In the struct, header length will be used as the total byte count instead of the 32-bit word
-    // count for simplicity. Convertion will happen when transforming a struct instance into a byte
-    // stream and when creating an instance from a byte stream
-    hlen: usize,
-    flags: Flags,
-    window: u16,
-    checksum: u16,
-    urgent_ptr: u16,
-    opts: Vec<u8>,
-    payload: Vec<u8>,
+pub struct Clock(Instant);
+
+impl Clock {
+    pub fn new() -> Self {
+        Clock(Instant::now())
+    }
+
+    pub fn ticks_4_ms(&self) -> u32 {
+        let elapsed = self.0.elapsed();
+        // TCP specs state that the clock should be incremented every 4 microseconds until it
+        // overflows a 32-bit unsigned integer
+        // So, we divide the elapsed time in ms by 4, since integer division truncates towards
+        // zero (flooring for positives)
+        //      0,1,2,3 elapsed -> 0 ticks - 4,5,6,7 elapsed -> 1 tick
+        (elapsed.as_micros() / 4) as u32
+    }
 }
+
+// A LazyLock is a thread safe type that allows a value to be initialized on first access and then
+// provides thread-wide read access for the lifetime of the process
+static CLOCK: LazyLock<Clock> = LazyLock::new(Clock::new);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // Tuple struct. It has one unnamed field of type u16
@@ -49,31 +61,31 @@ impl Flags {
 impl fmt::Display for Flags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.contains(Flags::FIN) {
-            write!(f, "Finish ");
+            write!(f, "Finish ")?;
         }
         if self.contains(Flags::SYN) {
-            write!(f, "Synchronize ");
+            write!(f, "Synchronize ")?;
         }
         if self.contains(Flags::RST) {
-            write!(f, "Reset ");
+            write!(f, "Reset ")?;
         }
         if self.contains(Flags::PSH) {
-            write!(f, "Push ");
+            write!(f, "Push ")?;
         }
         if self.contains(Flags::ACK) {
-            write!(f, "Acknowledge ");
+            write!(f, "Acknowledge ")?;
         }
         if self.contains(Flags::URG) {
-            write!(f, "Urgent ");
+            write!(f, "Urgent ")?;
         }
         if self.contains(Flags::ECE) {
-            write!(f, "ECN Echo ");
+            write!(f, "ECN Echo ")?;
         }
         if self.contains(Flags::CWR) {
-            write!(f, "Congestion Window Reduced ");
+            write!(f, "Congestion Window Reduced ")?;
         }
         if self.contains(Flags::AE) {
-            write!(f, "Accurate ECN ");
+            write!(f, "Accurate ECN ")?;
         }
 
         Result::Ok(())
@@ -119,14 +131,38 @@ impl BitOrAssign for Flags {
     }
 }
 
+pub struct Segment {
+    src_port: u16,
+    dest_port: u16,
+    seq_num: u32,
+    ack_num: u32,
+    // In the struct, header length will be used as the total byte count instead of the 32-bit word
+    // count for simplicity. Convertion will happen when transforming a struct instance into a byte
+    // stream and when creating an instance from a byte stream
+    hlen: usize,
+    flags: Flags,
+    window: u16,
+    checksum: u16,
+    urgent_ptr: u16,
+    opts: Vec<u8>,
+    payload: Vec<u8>,
+}
+
 impl Segment {
-    pub fn new(src_port: u16, dest_port: u16, flags: Flags, payload: Vec<u8>) -> Self {
+    pub fn new(
+        src_ip: &[u8],
+        src_port: u16,
+        dest_ip: &[u8],
+        dest_port: u16,
+        flags: Flags,
+        payload: Vec<u8>,
+    ) -> Self {
         let default_hlen = 20;
 
         Self {
             src_port: src_port,
             dest_port: dest_port,
-            seq_num: Self::gen_seq_num(),
+            seq_num: 0,
             ack_num: 0,
             hlen: default_hlen,
             flags: flags,
@@ -136,6 +172,13 @@ impl Segment {
             opts: vec![],
             payload: payload,
         }
+        .gen_isn(
+            &src_ip,
+            &src_port.to_be_bytes(),
+            &dest_ip,
+            &dest_port.to_be_bytes(),
+            crypto::SECRET.bytes(),
+        )
     }
 
     pub fn ack(mut self, ack_num: u32) -> Self {
@@ -163,20 +206,32 @@ impl Segment {
         self
     }
 
-    // Generate the Initial Sequence Number
-    // TODO
-    pub fn gen_seq_num() -> u32 {
-        0
+    fn gen_isn(
+        mut self,
+        src_ip: &[u8],
+        src_port: &[u8],
+        dest_ip: &[u8],
+        dest_port: &[u8],
+        secret: &[u8],
+    ) -> Self {
         // ISN = M + F(src_ip, srp_port, dest_ip, dest_port, secret)
         // M = TCP Clock, +1 every 4ms
         // F = PRF of the connection
         // secret length -> min 128 bits
-        // The secret should be rotated:
-        //   - On stack start-up, with the system timer as a seed
-        //   - After a given time has expired
-        //   - Max amount of usages exceeded
         // When rotating the secret, ISN space changes so colision could happen. Guard aggainst
         // this
+
+        let mut connection = Vec::new();
+
+        connection.extend_from_slice(src_ip);
+        connection.extend_from_slice(src_port);
+        connection.extend_from_slice(dest_ip);
+        connection.extend_from_slice(dest_port);
+
+        let hash = crypto::hmac::generate::<crypto::sha_256::Sha256>(secret, &connection);
+
+        self.seq_num = CLOCK.ticks_4_ms().wrapping_add(hash.into());
+        self
     }
 
     pub fn checksum(mut self, src_ip: &[u8], dest_ip: &[u8], proto: u8) -> Self {
