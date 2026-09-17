@@ -3,15 +3,8 @@ use std::sync::LazyLock;
 pub mod hmac;
 pub mod sha_256;
 
-// Implementations of this trait must expose convertion into Vec<u8> and the primitive defined
-// in the associatyed type
-// Value of Primitive should be a valid rust primitive
-pub trait HashDigest: Into<Vec<u8>> + Into<Self::Primitive> {
-    type Primitive;
-}
-
 pub trait Hasher {
-    type Digest: HashDigest;
+    type Digest: Into<Vec<u8>>;
     const BLOCK_SIZE: usize;
 
     fn hash(message: &[u8]) -> Self::Digest;

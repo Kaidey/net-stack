@@ -1,13 +1,12 @@
-use crate::{
-    crypto,
-    net::com::ethernet_payloads::utils,
-};
 use core::fmt;
 use std::{
     ops::{BitOr, BitOrAssign},
     sync::LazyLock,
     time::Instant,
 };
+
+use crate::crypto;
+use crate::net::com::utils;
 
 pub struct Clock(Instant);
 
@@ -229,8 +228,10 @@ impl Segment {
         connection.extend_from_slice(dest_port);
 
         let hash = crypto::hmac::generate::<crypto::sha_256::Sha256>(secret, &connection);
+        let hash_bytes = hash.bytes();
+        let hash_first_u32 = u32::from_be_bytes([hash_bytes[0], hash_bytes[1], hash_bytes[2], hash_bytes[3]]);
 
-        self.seq_num = CLOCK.ticks_4_ms().wrapping_add(hash.into());
+        self.seq_num = CLOCK.ticks_4_ms().wrapping_add(hash_first_u32);
         self
     }
 

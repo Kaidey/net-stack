@@ -1,12 +1,16 @@
-use crate::crypto::HashDigest;
-
 use super::Hasher;
 use core::fmt;
 use std::f64;
 
 pub struct Sha256;
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Sha256Digest([u8; 32]);
+
+impl Sha256Digest {
+    pub fn bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
 
 impl fmt::Display for Sha256Digest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -17,19 +21,9 @@ impl fmt::Display for Sha256Digest {
     }
 }
 
-impl HashDigest for Sha256Digest{
-    type Primitive = u32;
-}
-
 impl From<Sha256Digest> for Vec<u8> {
     fn from(digest: Sha256Digest) -> Self {
         digest.0.to_vec()
-    }
-}
-
-impl From<Sha256Digest> for u32 {
-    fn from(digest: Sha256Digest) -> Self {
-        u32::from_be_bytes([digest.0[0], digest.0[1], digest.0[2], digest.0[3]])
     }
 }
 
