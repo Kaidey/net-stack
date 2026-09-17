@@ -1,6 +1,7 @@
 use core::fmt;
+use crate::net::com::arp;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 // In the case of enums, Debug allows us to use the format specifier {:?} to print the variant
 // labels
 pub enum EtherType {

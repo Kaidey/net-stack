@@ -26,6 +26,7 @@ impl fmt::Display for Operation {
     }
 }
 
+#[derive(Debug,Clone,PartialEq,Eq)]
 pub struct Datagram {
     src_hardware_addr: address::HardwareAddress,
     dest_hardware_addr: address::HardwareAddress,

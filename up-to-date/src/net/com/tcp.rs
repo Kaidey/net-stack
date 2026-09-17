@@ -130,6 +130,7 @@ impl BitOrAssign for Flags {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
     src_port: u16,
     dest_port: u16,
@@ -229,7 +230,8 @@ impl Segment {
 
         let hash = crypto::hmac::generate::<crypto::sha_256::Sha256>(secret, &connection);
         let hash_bytes = hash.bytes();
-        let hash_first_u32 = u32::from_be_bytes([hash_bytes[0], hash_bytes[1], hash_bytes[2], hash_bytes[3]]);
+        let hash_first_u32 =
+            u32::from_be_bytes([hash_bytes[0], hash_bytes[1], hash_bytes[2], hash_bytes[3]]);
 
         self.seq_num = CLOCK.ticks_4_ms().wrapping_add(hash_first_u32);
         self

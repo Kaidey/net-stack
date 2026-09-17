@@ -4,6 +4,7 @@ pub enum AddressError{
     NotEnoughOctets
 }
 
+#[derive(Debug,Clone,PartialEq,Eq)]
 pub enum ProtocolAddress {
     IPv4(IPv4Address),
     IPv6(IPv6Address),
@@ -63,6 +64,7 @@ impl fmt::Display for ProtocolAddress {
     }
 }
 
+#[derive(Debug,Clone,PartialEq,Eq)]
 pub enum HardwareAddress {
     MAC(MacAddress),
 }
@@ -110,6 +112,7 @@ impl fmt::Display for HardwareAddress {
     }
 }
 
+#[derive(Debug,Copy,Clone,PartialEq,Eq)]
 pub struct IPv4Address(pub [u8; 4]);
 
 impl IPv4Address {
@@ -168,6 +171,7 @@ impl fmt::Display for IPv4Address {
     }
 }
 
+#[derive(Debug,Clone,PartialEq,Eq)]
 pub struct MacAddress(pub [u8; 6]);
 
 impl MacAddress {
@@ -226,4 +230,5 @@ impl fmt::Display for MacAddress {
     }
 }
 
+#[derive(Debug,Clone,PartialEq,Eq)]
 pub struct IPv6Address(String);

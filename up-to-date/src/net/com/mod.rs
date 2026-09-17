@@ -1,11 +1,24 @@
+use std::fmt::{self, Display};
+
 use libc::{c_void, recv, send};
 
+pub mod address;
 pub mod arp;
 pub mod ethernet;
 pub mod ipv4;
 pub mod tcp;
-pub mod address;
 pub mod utils;
+
+pub trait PduPayload {
+    type Payload: Display;
+    type ErrorSpace;
+    type CodepointType;
+
+    const CODEPOINT: Self::CodepointType;
+
+    fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace>;
+    fn deserialize_payload(payload: &[u8]) -> Result<Self::Payload, Self::ErrorSpace>;
+}
 
 // pub fn run_arp(
 //     socket_fd: i32,
