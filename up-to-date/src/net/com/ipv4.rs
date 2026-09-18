@@ -1,5 +1,4 @@
 use core::fmt;
-use std::ops::{BitOr, BitOrAssign};
 
 use crate::net::com::{
     PduPayload,
@@ -15,29 +14,6 @@ fn next_datagram_id() -> u16 {
         NEXT_ID = NEXT_ID.wrapping_add(1);
         NEXT_ID
     }
-}
-pub struct Datagram<P>
-where
-    P: PduPayload,
-{
-    version: u8,
-    // In the struct, header length will be used as the total byte count instead of the 32-bit word
-    // count for simplicity. Convertion will happen when transforming a struct instance into a byte
-    // stream and when creating an instance from a byte stream
-    hlen: usize,
-    dscp: Dscp,
-    // TODO: Understand and impl
-    ecn: u8,
-    total_len: usize,
-    id: u16,
-    flags: FragmentationFlags,
-    fragment_offset: u16,
-    ttl: u8,
-    checksum: u16,
-    src_addr: IPv4Address,
-    dest_addr: IPv4Address,
-    opts: Vec<u8>,
-    payload: P::Payload,
 }
 
 // DSCP codepoints for Per-Hop Behaviour https://networklessons.com/quality-of-service/ip-precedence-dscp-values
@@ -174,17 +150,86 @@ pub enum DatagramError {
     AddressParsingFailed,
     PayloadWrong,
     DatagramWrong,
+    ProtocolMismatch,
 }
 
 impl From<AddressError> for DatagramError {
     fn from(err: AddressError) -> Self {
         match err {
             AddressError::NotEnoughOctets => DatagramError::AddressParsingFailed,
+            AddressError::ConvertionFailed => DatagramError::AddressParsingFailed
         }
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IPv4Payload {
+    Tcp(Datagram<tcp::Segment>),
+    // Udp(Datagram<udp::Segment>),
+    Unknown(Datagram<UnknownPayload>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownPayload(u8, Vec<u8>);
+
+impl PduPayload for UnknownPayload {
+    type Payload = UnknownPayload;
+    type ErrorSpace = DatagramError;
+    type CodepointType = u8;
+
+    fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace> {
+        Ok((*payload).1.to_vec())
+    }
+    fn deserialize_payload(
+        cp: Self::CodepointType,
+        payload: &[u8],
+    ) -> Result<Self::Payload, Self::ErrorSpace> {
+        Ok(UnknownPayload(cp, payload.to_vec()))
+    }
+    fn codepoint(payload: &Self::Payload) -> Self::CodepointType {
+        payload.0
+    }
+    fn name() -> String {
+        String::from("")
+    }
+}
+
+impl fmt::Display for UnknownPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Codepoint: {:02X}", self.0)?;
+        write!(f, "Payload: {:?}", self.1)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Datagram<P>
+where
+    P: PduPayload,
+{
+    version: u8,
+    // In the struct, header length will be used as the total byte count instead of the 32-bit word
+    // count for simplicity. Convertion will happen when transforming a struct instance into a byte
+    // stream and when creating an instance from a byte stream
+    hlen: usize,
+    dscp: Dscp,
+    // TODO: Understand and impl
+    ecn: u8,
+    total_len: usize,
+    id: u16,
+    flags: FragmentationFlags,
+    fragment_offset: u16,
+    ttl: u8,
+    checksum: u16,
+    src_addr: IPv4Address,
+    dest_addr: IPv4Address,
+    opts: Vec<u8>,
+    payload: P::Payload,
+}
+
 impl<P: PduPayload<CodepointType = u8>> Datagram<P> {
+    pub const CODEPOINT: u16 = 0x0800;
+
     pub fn new(
         src_addr: IPv4Address,
         dest_addr: IPv4Address,
@@ -274,19 +319,30 @@ impl<P: PduPayload<CodepointType = u8>> PduPayload for Datagram<P> {
     type Payload = Datagram<P>;
     type ErrorSpace = DatagramError;
     type CodepointType = u16;
-    
-    const CODEPOINT: Self::CodepointType = 0x0800;
 
     fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace> {
         let vec = Vec::try_from(payload).or_else(|_| Err(DatagramError::AddressParsingFailed))?;
         Ok(vec)
     }
 
-    fn deserialize_payload(payload: &[u8]) -> Result<Self::Payload, Self::ErrorSpace> {
+    fn deserialize_payload(
+        cp: Self::CodepointType,
+        payload: &[u8],
+    ) -> Result<Self::Payload, Self::ErrorSpace> {
+        if cp != Self::CODEPOINT {
+            return Err(DatagramError::ProtocolMismatch);
+        }
         let datag =
             Datagram::try_from(payload).or_else(|_| Err(DatagramError::AddressParsingFailed))?;
 
         Ok(datag)
+    }
+
+    fn codepoint(_payload: &Self::Payload) -> Self::CodepointType {
+        Self::CODEPOINT
+    }
+    fn name() -> String {
+        String::from("IPv4")
     }
 }
 
@@ -305,7 +361,7 @@ impl<P: PduPayload<CodepointType = u8>> TryFrom<&Datagram<P>> for Vec<u8> {
             &((datagram.flags.bits() as u16) << 13 | datagram.fragment_offset).to_be_bytes(),
         );
         bytes.push(datagram.ttl);
-        bytes.push(P::CODEPOINT);
+        bytes.push(P::codepoint(&datagram.payload));
         bytes.extend_from_slice(&datagram.checksum.to_be_bytes());
         bytes.extend_from_slice(&datagram.src_addr.addr_bytes());
         bytes.extend_from_slice(&datagram.dest_addr.addr_bytes());
@@ -326,12 +382,6 @@ impl<P: PduPayload<CodepointType = u8>> TryFrom<&[u8]> for Datagram<P> {
         let hlen_in_bytes: usize = hlen_in_32bit_words * 4;
         let total_len: usize = u16::from_be_bytes([buffer[2], buffer[3]]) as usize;
 
-        if buffer[9] != P::CODEPOINT {
-            // If the codepoint for protocol type in the Datagram differs from the codepoint
-            // associated with whatever type P assumes
-            return Err(DatagramError::PayloadWrong);
-        }
-
         let src_addr = IPv4Address::try_from(&buffer[12..16])?;
         let dest_addr = IPv4Address::try_from(&buffer[16..20])?;
 
@@ -350,7 +400,8 @@ impl<P: PduPayload<CodepointType = u8>> TryFrom<&[u8]> for Datagram<P> {
             dest_addr: dest_addr,
             // TODO: Option parser
             opts: buffer[20..hlen_in_bytes].to_vec(),
-            payload: P::deserialize_payload(&buffer[hlen_in_bytes..])
+            // buffer[9] is the next protocol field aka the protocol codepoint
+            payload: P::deserialize_payload(buffer[9], &buffer[hlen_in_bytes..])
                 .or_else(|_| Err(DatagramError::PayloadWrong))?,
         })
     }
@@ -366,17 +417,22 @@ impl<P: PduPayload<CodepointType = u8>> fmt::Display for Datagram<P> {
             self.hlen
         )?;
         write!(f, "\nType Of Service (DSCP): {}", self.dscp)?;
-        write!(f, "\nTotal Datagram Length: {}", self.total_len)?;
+        write!(f, "\nTotal Datagram Length: {} bytes", self.total_len)?;
         write!(f, "\nID: {:04X}", self.id)?;
         write!(f, "\nFragmentation Flag: {}", self.flags)?;
         write!(f, "\nFragment Offset: {:02X}", self.fragment_offset)?;
         write!(f, "\nTime To Live: {}", self.ttl)?;
-        write!(f, "\nNext Level Protocol: {}", P::CODEPOINT)?;
+        write!(
+            f,
+            "\nNext Level Protocol: {:02X}",
+            P::codepoint(&self.payload)
+        )?;
         write!(f, "\nChecksum: {:04X}", self.checksum)?;
         write!(f, "\nSource Address: {}", self.src_addr)?;
         write!(f, "\nDestination Address: {}", self.dest_addr)?;
         // TODO: Option parser
         write!(f, "\nOptions: {:X?}", self.opts)?;
+        // Review/Test
         write!(f, "{}", self.payload)?;
 
         Ok(())

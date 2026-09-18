@@ -1,6 +1,12 @@
-use std::fmt::{self, Display};
+use std::fmt;
 
 use libc::{c_void, recv, send};
+
+use crate::net::com::{
+    address::{IPv4Address, MacAddress},
+    arp::{Datagram, Operation},
+    ethernet::EthernetFrame,
+};
 
 pub mod address;
 pub mod arp;
@@ -10,93 +16,92 @@ pub mod tcp;
 pub mod utils;
 
 pub trait PduPayload {
-    type Payload: Display;
+    type Payload: fmt::Display;
     type ErrorSpace;
     type CodepointType;
 
-    const CODEPOINT: Self::CodepointType;
-
     fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace>;
-    fn deserialize_payload(payload: &[u8]) -> Result<Self::Payload, Self::ErrorSpace>;
+    fn deserialize_payload(
+        codepoint: Self::CodepointType,
+        payload: &[u8],
+    ) -> Result<Self::Payload, Self::ErrorSpace>;
+    fn codepoint(payload: &Self::Payload) -> Self::CodepointType;
+    fn name() -> String;
 }
 
-// pub fn run_arp(
-//     socket_fd: i32,
-//     src_mac: [u8; 6],
-//     src_ip: [u8; 4],
-//     dest_ip: [u8; 4],
-// ) -> Option<[u8; 6]> {
-//     let x = arp::Datagram::new::<IPv4Address>();
-//     let arp_packet = arp::Datagram::new(
-//         AddressFamily::MAC,
-//         AddressFamily::IPV4,
-//         arp::Operation::REQUEST,
-//         src_mac,
-//         src_ip,
-//         dest_ip,
-//     );
-//
-//     let eth_frame = EthernetFrame::new(
-//         [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
-//         src_mac,
-//         FrameType::Arp.hex_value(),
-//         arp_packet.into(),
-//     );
-//
-//     let frame_as_bytes: Vec<u8> = eth_frame.to_bytes();
-//
-//     let bytes_sent = unsafe {
-//         send(
-//             socket_fd,
-//             frame_as_bytes.as_ptr() as *const _,
-//             frame_as_bytes.len(),
-//             0,
-//         )
-//     };
-//
-//     if bytes_sent < 0 {
-//         println!(
-//             "Failed to send ARP request: {}",
-//             std::io::Error::last_os_error()
-//         );
-//     }
-//     // Since new_socket() is a generic, we need to tell the compiler what type None should be
-//     // treated as. The function expects any type that implements Into<String>, so we tell the comp
-//     // to treat None as a String
-//
-//     let mut buffer = [0u8; 65536];
-//
-//     let mut dest_mac: Option<[u8; 6]> = None;
-//
-//     // Make sure to only capture replies to my request (op = reply, dest_mac = input src_marc,
-//     // dest_ip = input src_ip, src_ip = input dest_ip
-//     //
-//     // Handle reply not being received
-//     // threads?
-//     // loop has to go
-//     // Retries with limit wait time?
-//     loop {
-//         let frame_size = unsafe {
-//             recv(
-//                 socket_fd,
-//                 buffer.as_mut_ptr() as *mut c_void,
-//                 buffer.len(),
-//                 0,
-//             )
-//         };
-//
-//         if frame_size < 0 {
-//             panic!("Error receiving frame: {}", std::io::Error::last_os_error());
-//         }
-//
-//         let frame: EthernetFrame = EthernetFrame::from(buffer.to_vec());
-//         let is_arp: Datagram = Datagram::from(frame.payload);
-//
-//         if is_arp.op == arp::Operation::REPLY && is_arp.dest_hardware_addr == src_mac {
-//             dest_mac = Some(is_arp.src_hardware_addr);
-//             break;
-//         }
-//     }
-//
-//     dest_mac
-// }
+pub fn run_arp(
+    socket_fd: i32,
+    src_mac: MacAddress,
+    src_ip: IPv4Address,
+    dest_ip: IPv4Address,
+) -> Option<[u8; 6]> {
+    // TODO: Error handling
+    let dest_mac = MacAddress::try_from("00-00-00-00-00-00").expect("Wrong Broadcast MAC");
+
+    let arp_datagram = Datagram::new(
+        address::HardwareAddress::MAC(src_mac.clone()),
+        address::HardwareAddress::MAC(dest_mac.clone()),
+        address::ProtocolAddress::IPv4(src_ip),
+        address::ProtocolAddress::IPv4(dest_ip),
+        Operation::REQUEST,
+    );
+
+    let outbound_frame = EthernetFrame::<arp::Datagram>::new(dest_mac, src_mac, arp_datagram);
+
+    let frame_as_bytes = Vec::try_from(&outbound_frame).expect("Wrong");
+
+    let bytes_sent = unsafe {
+        send(
+            socket_fd,
+            frame_as_bytes.as_ptr() as *const _,
+            frame_as_bytes.len(),
+            0,
+        )
+    };
+
+    if bytes_sent < 0 {
+        println!(
+            "Failed to send ARP request: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let mut buffer = [0u8; 65536];
+
+    // Handle reply not being received
+    // threads?
+    // Retries with limit wait time?
+    loop {
+        let frame_size = unsafe {
+            recv(
+                socket_fd,
+                buffer.as_mut_ptr() as *mut c_void,
+                buffer.len(),
+                0,
+            )
+        };
+
+        if frame_size < 0 {
+            panic!("Error receiving frame: {}", std::io::Error::last_os_error());
+        }
+
+        let eth_type = u16::from_be_bytes([buffer[12], buffer[13]]);
+
+        match eth_type {
+            0x0806 => {
+                let inbound_frame =
+                    EthernetFrame::<arp::Datagram>::try_from(buffer.as_slice()).ok()?;
+
+                if inbound_frame.payload.src_proto_addr == outbound_frame.payload.dest_proto_addr
+                    && inbound_frame.payload.op == Operation::REPLY
+                {
+                    println!("Buffer: {:02X?}", buffer);
+                    let mut target_mac = [0; 6];
+                    target_mac
+                        .copy_from_slice(inbound_frame.payload.src_hardware_addr.addr_bytes());
+                    return Some(target_mac);
+                }
+            }
+            _ => {}
+        };
+    }
+}

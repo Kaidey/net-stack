@@ -2,7 +2,10 @@ mod com;
 mod socket;
 
 // use crate::net::com::{address, arp, ethernet, ipv4, run_arp, tcp};
-use crate::net::com::{address, arp, ethernet, ipv4, tcp};
+use crate::net::com::{
+    address::{self, MacAddress},
+    arp, ethernet, ipv4, run_arp, tcp,
+};
 
 const DEFAULT_NET_ITF: &str = "eth1";
 
@@ -31,91 +34,117 @@ impl TcpConnection {
         // Radix is the same as the base of the number system we want to use (base 10 here)
         let radix: u32 = 10;
 
-        let dest_ip = com::address::IPv4Address::try_from(slices[0]).map_err(|_| TcpError::InvalidAddress)?;
-        let dest_port_digits: Vec<u32> = slices[1]
-            .chars()
-            .map(|c| c.to_digit(radix))
-            .collect::<Option<Vec<u32>>>()
-            .ok_or(TcpError::InvalidPort)?;
+        let dest_ip = com::address::IPv4Address::try_from("192.168.68.1")
+            .map_err(|_| TcpError::InvalidAddress)?;
+        // let dest_port_digits: Vec<u32> = slices[1]
+        //     .chars()
+        //     .map(|c| c.to_digit(radix))
+        //     .collect::<Option<Vec<u32>>>()
+        //     .ok_or(TcpError::InvalidPort)?;
 
-        println!("IP: {}", dest_ip);
-        println!("Port: {:?}", dest_port_digits);
+        let src_ip = com::address::IPv4Address::try_from("192.168.68.101")
+            .map_err(|_| TcpError::InvalidAddress)?;
+        // let src_port_digits: Vec<u32> = slices[1]
+        //     .chars()
+        //     .map(|c| c.to_digit(radix))
+        //     .collect::<Option<Vec<u32>>>()
+        //     .ok_or(TcpError::InvalidPort)?;
 
-        return Err(TcpError::MalformedAddressString);
+        let src_mac =
+            MacAddress::try_from("94-BB-43-4E-CE-BC").map_err(|_| TcpError::InvalidAddress)?;
 
-        //     let sock_fd = socket::new_socket(Some(DEFAULT_NET_ITF));
+        let sock_fd = socket::new_socket(Some(DEFAULT_NET_ITF));
+
+        let target_mac = run_arp(sock_fd, src_mac, src_ip, dest_ip).unwrap();
+        println!("Target MAC: {:02X?}", target_mac);
         //     // TODO: Init TCP Handshake
-        //     let tcp_segment = tcp::Segment::new(
-        //         src_ip,
-        //         src_port,
-        //         dest_ip,
-        //         dest_port,
-        //         tcp::Flags::SYN,
-        //         payload,
-        //     );
-        //
-        //     let ip_datagram =
-        //         ipv4::Datagram::new(ipv4::Protocol::TCP, src_addr, dest_ip, tcp_segment.into());
-        //
-        //     // TODO: Run ARP
-        //
-        //     let eth_frame = ethernet::EthernetFrame::new(
-        //         dest_mac,
-        //         src_mac,
-        //         ethernet::EtherType::IPv4,
-        //         ip_datagram.into(),
-        //     );
-        //
-        //     Ok(Self {
-        //         sock_fd: sock_fd,
-        //         dest_ip: dest_ip,
-        //         dest_port: dest_port.to_owned(),
-        //     })
+
+        Err(TcpError::InvalidAddress)
     }
 }
 
-// pub fn test() {
-//     // let sock_fd = socket::new_socket(Some("eth1"));
+pub fn test_parsing(dest_addr: &str) {
+    let slices = dest_addr.split(":").collect::<Vec<&str>>();
+
+    if slices.len() != 2 || slices[1].is_empty() {
+        panic!("OH NO");
+    }
+
+    // Radix is the same as the base of the number system we want to use (base 10 here)
+    let radix: u32 = 10;
+
+    let dest_ip = com::address::IPv4Address::try_from(slices[0])
+        .map_err(|_| TcpError::InvalidAddress)
+        .expect("OH NO");
+
+    let src_ip = com::address::IPv4Address::try_from(slices[0])
+        .map_err(|_| TcpError::InvalidAddress)
+        .expect("OH NO");
+
+    let tcp_segment = tcp::Segment::new(
+        src_ip,
+        0x80,
+        dest_ip,
+        0x80,
+        tcp::Flags::SYN,
+        vec![1 as u8, 2 as u8, 3 as u8],
+    );
+
+    let ip_datagram = ipv4::Datagram::<tcp::Segment>::new(src_ip, dest_ip, tcp_segment)
+        .or_else(|_| Err(TcpError::InvalidAddress))
+        .expect("OH NO");
+
+    let dest_mac = MacAddress::try_from("12-12-12-12-12-12").unwrap();
+    let src_mac = MacAddress::try_from("21-21-21-21-21-21").unwrap();
+    let eth_frame = ethernet::EthernetFrame::<ipv4::Datagram<tcp::Segment>>::new(
+        dest_mac,
+        src_mac,
+        ip_datagram,
+    );
+
+    let frame_as_bytes: Vec<u8> = Vec::try_from(&eth_frame)
+        .or_else(|_| Err(TcpError::InvalidPort))
+        .expect("OH NO");
+
+    println!("Frame:\n {}", eth_frame);
+
+    let new_frame = ethernet::EthernetFrame::<ipv4::Datagram<tcp::Segment>>::try_from(
+        frame_as_bytes.as_slice(),
+    )
+    .or_else(|_| Err(TcpError::InvalidAddress))
+    .expect("OH NO");
+
+    println!("\n\nFrame From Bytes:\n {}", new_frame);
+
+    // Ok(Self {
+    //     sock_fd: sock_fd,
+    //     dest_ip: dest_ip,
+    //     dest_port: dest_port.to_owned(),
+    // })
+}
+
 //
-//     // let dest_mac: Option<[u8; 6]> = run_arp(
-//     //     sock_fd,
-//     //     [0x94, 0xBB, 0x43, 0x4E, 0xCE, 0xBC],
-//     //     [192, 168, 68, 101],
-//     //     [192, 168, 68, 100],
-//     // );
-//     //
-//     // println!("Destination MAC: {:02X?}", dest_mac.unwrap());
-//
-//     let tcp: tcp::Segment = tcp::Segment::new(
-//         &[192 as u8, 168 as u8, 68 as u8, 1 as u8],
-//         1,
-//         &[192 as u8, 172 as u8, 50 as u8, 1 as u8],
-//         2,
-//         tcp::Flags::SYN,
-//         vec![1, 2],
-//     )
-//     .checksum(
-//         &[192 as u8, 168 as u8, 68 as u8, 1 as u8],
-//         &[192 as u8, 172 as u8, 50 as u8, 1 as u8],
-//         ipv4::Protocol::TCP.bits(),
-//     );
-//
-//     let packet: ipv4::Datagram = ipv4::Datagram::new(
-//         ipv4::Protocol::TCP,
-//         [192, 168, 68, 1],
-//         [192, 172, 50, 1],
-//         Vec::from(&tcp),
-//     )
-//     .unwrap()
-//     .ttl(128)
-//     .flags(ipv4::FragmentationFlags::MORE_FRAGMENTS)
-//     .fragment_offset(0xB1)
-//     .dscp(ipv4::Dscp::AF21)
-//     .checksum();
-//
-//     println!("{}", packet);
-//
-//     let packet_from = ipv4::Datagram::from(Vec::from(&packet).as_slice());
-//
-//     println!("From: \n{}", packet_from);
-// }
+// PARSING FRAMES FROM WIRE; IP EXAMPLE
+// 0x0800 => {
+//                 // Ethernet frame has 14 bytes of header. Next proto field is byte 10 (9 index) of an IPv4
+//                 // header
+//                 let next_proto_cp = buffer[14 + 9];
+//                 let ipv4_payload = match next_proto_cp {
+//                     tcp::Segment::CODEPOINT => {
+//                         let frame = EthernetFrame::<ipv4::Datagram<tcp::Segment>>::try_from(
+//                             buffer.as_slice(),
+//                         )
+//                         .ok()?;
+//                         IPv4Payload::Tcp(frame.payload)
+//                     }
+//                     _ => {
+//                         let frame =
+//                             EthernetFrame::<ipv4::Datagram<ipv4::UnknownPayload>>::try_from(
+//                                 buffer.as_slice(),
+//                             )
+//                             .ok()?;
+//                         IPv4Payload::Unknown(frame.payload)
+//                     }
+//                 };
+//                 EtherPayload::IPv4(ipv4_payload);
+//             }

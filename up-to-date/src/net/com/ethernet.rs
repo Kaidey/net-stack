@@ -1,128 +1,126 @@
+use crate::net::com::{PduPayload, address::MacAddress, arp, ipv4};
 use core::fmt;
-use crate::net::com::arp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// In the case of enums, Debug allows us to use the format specifier {:?} to print the variant
-// labels
-pub enum EtherType {
-    IPv4,
-    IPv6,
-    Arp,
-    Length(u16),
+pub enum EtherPayload {
+    IPv4(ipv4::IPv4Payload),
+    // IPv6,
+    Arp(EthernetFrame<arp::Datagram>),
+    Unknown(EthernetFrame<UnknownPayload>),
 }
 
-impl From<u16> for EtherType {
-    fn from(value: u16) -> Self {
-        match value {
-            0x0800 => EtherType::IPv4,
-            0x0806 => EtherType::Arp,
-            0x86DD => EtherType::IPv6,
-            // Values up to 1500 are valid lengths, since 1500 bytes is the MTU for ethernet
-            // Only values above 1536 (inclusive) are mapped to EhterTypes and 1501-1535 is unused
-            v if v <= 1500 => EtherType::Length(v),
-            _ => panic!("Unknown/invalid EtherType of length"),
-        }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrameError {
+    FrameBad,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownPayload(u16, Vec<u8>);
+
+impl PduPayload for UnknownPayload {
+    type Payload = UnknownPayload;
+    type ErrorSpace = FrameError;
+    type CodepointType = u16;
+
+    fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace> {
+        Ok((*payload).1.to_vec())
+    }
+    fn deserialize_payload(
+        cp: Self::CodepointType,
+        payload: &[u8],
+    ) -> Result<Self::Payload, Self::ErrorSpace> {
+        Ok(UnknownPayload(cp, payload.to_vec()))
+    }
+    fn codepoint(payload: &Self::Payload) -> Self::CodepointType {
+        payload.0
+    }
+    fn name() -> String {
+        String::from("")
     }
 }
 
-impl From<&EtherType> for u16 {
-    fn from(variant: &EtherType) -> u16 {
-        match *variant {
-            EtherType::IPv4 => 0x0800,
-            EtherType::Arp => 0x0806,
-            EtherType::IPv6 => 0x86DD,
-            // This syntax is called destructuring, in this case for enums https://google.github.io/comprehensive-rust/pattern-matching/destructuring-enums.html
-            // If 'variant' is EtherType::Length, the u16 value held by the variant will be bound to 'len'
-            EtherType::Length(len) => len,
-        }
+impl fmt::Display for UnknownPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Codepoint: {:02X}", self.0)?;
+        write!(f, "Payload: {:?}", self.1)?;
+        Ok(())
     }
 }
 
-pub struct EthernetFrame {
-    dest_mac_address: [u8; 6],
-    src_mac_address: [u8; 6],
-    // Type or length of the payload
-    type_or_length: EtherType,
-    payload: Vec<u8>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EthernetFrame<P>
+where
+    P: PduPayload,
+{
+    dest_mac_address: MacAddress,
+    src_mac_address: MacAddress,
+    pub payload: P::Payload,
 }
 
-impl EthernetFrame {
+impl<P: PduPayload<CodepointType = u16>> EthernetFrame<P> {
     pub fn new(
-        dest_mac_address: [u8; 6],
-        src_mac_address: [u8; 6],
-        type_or_length: EtherType,
-        payload: Vec<u8>,
+        dest_mac_address: MacAddress,
+        src_mac_address: MacAddress,
+        payload: P::Payload,
     ) -> Self {
         Self {
             dest_mac_address: dest_mac_address,
             src_mac_address: src_mac_address,
-            type_or_length: type_or_length,
             payload: payload,
         }
     }
 }
 
-impl From<&EthernetFrame> for Vec<u8> {
-    fn from(value: &EthernetFrame) -> Self {
+impl<P: PduPayload<CodepointType = u16>> TryFrom<&EthernetFrame<P>> for Vec<u8> {
+    type Error = FrameError;
+
+    fn try_from(frame: &EthernetFrame<P>) -> Result<Self, Self::Error> {
         let mut bytes = Vec::new();
 
-        bytes.extend_from_slice(&value.dest_mac_address);
-        bytes.extend_from_slice(&value.src_mac_address);
-        bytes.extend_from_slice(&u16::from(&value.type_or_length).to_be_bytes());
-        bytes.extend_from_slice(&value.payload);
+        bytes.extend_from_slice(&frame.dest_mac_address.addr_bytes());
+        bytes.extend_from_slice(&frame.src_mac_address.addr_bytes());
+        // bytes.extend_from_slice(&u16::from(&value.type_or_length).to_be_bytes());
+        bytes.extend_from_slice(&P::codepoint(&frame.payload).to_be_bytes());
+        let serialized_payload =
+            P::serialize_payload(&frame.payload).or_else(|_| Err(FrameError::FrameBad))?;
+        bytes.extend_from_slice(&serialized_payload);
 
-        bytes
+        Ok(bytes)
     }
 }
 
-impl From<&[u8]> for EthernetFrame {
-    fn from(buffer: &[u8]) -> Self {
-        let mut eth_frame = Self {
-            dest_mac_address: [0, 0, 0, 0, 0, 0],
-            src_mac_address: [0, 0, 0, 0, 0, 0],
-            type_or_length: EtherType::from(u16::from_be_bytes([buffer[12], buffer[13]])),
-            payload: buffer[14..].to_vec(),
-        };
+impl<P: PduPayload<CodepointType = u16>> TryFrom<&[u8]> for EthernetFrame<P> {
+    type Error = FrameError;
 
-        eth_frame.dest_mac_address.copy_from_slice(&buffer[0..6]);
-        eth_frame.src_mac_address.copy_from_slice(&buffer[6..12]);
+    fn try_from(buffer: &[u8]) -> Result<Self, Self::Error> {
+        let eth_type = u16::from_be_bytes([buffer[12], buffer[13]]);
 
-        eth_frame
+        let dest_mac =
+            MacAddress::try_from(&buffer[0..6]).or_else(|_| Err(FrameError::FrameBad))?;
+        let src_mac =
+            MacAddress::try_from(&buffer[6..12]).or_else(|_| Err(FrameError::FrameBad))?;
+
+        Ok(Self {
+            dest_mac_address: dest_mac,
+            src_mac_address: src_mac,
+            payload: P::deserialize_payload(eth_type, &buffer[14..])
+                .or_else(|_| Err(FrameError::FrameBad))?,
+        })
     }
 }
 
-// impl fmt::Display for EthernetFrame {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         let mut serialized_payload: Option<PacketType> = None;
-//
-//         // TODO: Review
-//         for frame_type in FrameType::variations_as_vec().iter() {
-//             if frame_type.hex_value() == self.type_or_length {
-//                 serialized_payload = FrameType::serialize_payload(frame_type, self.payload.clone()) //frame_type.serialize_payload(self.payload.clone());
-//             }
-//         }
-//
-//         println!(
-//             "\nDestination MAC: {}",
-//             AddressFamily::MAC.addr_to_string(self.dest_mac_address.to_vec())
-//         );
-//         println!(
-//             "Source MAC: {}",
-//             AddressFamily::MAC.addr_to_string(self.src_mac_address.to_vec())
-//         );
-//         println!(
-//             "Frame Type/Length: {:04X?} ({})",
-//             self.type_or_length,
-//             FrameType::name_from_u16(self.type_or_length)
-//         );
-//
-//         match serialized_payload {
-//             Some(PacketType::Arp(arp)) => println!("{}", arp),
-//             Some(PacketType::IPv4(ipv4)) => println!("{}", ipv4),
-//             Some(PacketType::IPv6(ipv6)) => println!("{}", ipv6),
-//             None => println!("Unknown payload type"),
-//         }
-//
-//         fmt::Result::Ok(())
-//     }
-// }
+impl<P: PduPayload<CodepointType = u16>> fmt::Display for EthernetFrame<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\nDestination MAC: {}", self.dest_mac_address)?;
+        write!(f, "\nSource MAC: {}", self.src_mac_address)?;
+        write!(
+            f,
+            "\nFrame Type/Length: {:04X?} ({})",
+            P::codepoint(&self.payload),
+            P::name()
+        )?;
+        write!(f, "\nPayload: {}", self.payload)?;
+
+        Ok(())
+    }
+}

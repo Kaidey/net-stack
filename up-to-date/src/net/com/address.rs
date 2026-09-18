@@ -1,10 +1,12 @@
-use std::fmt;
+use std::{fmt, num::ParseIntError};
 
-pub enum AddressError{
-    NotEnoughOctets
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddressError {
+    NotEnoughOctets,
+    ConvertionFailed,
 }
 
-#[derive(Debug,Clone,PartialEq,Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolAddress {
     IPv4(IPv4Address),
     IPv6(IPv6Address),
@@ -14,7 +16,7 @@ impl ProtocolAddress {
     pub fn from_wire(cp: u16, addr_bytes: &[u8]) -> Option<Self> {
         match cp {
             0x0800 => Some(ProtocolAddress::IPv4(IPv4Address(
-                        // TODO: Error handling
+                // TODO: Error handling
                 addr_bytes.try_into().ok()?,
             ))),
             // cp if cp == IPv6Address::addr_codepoint() => Some(IPv6Address(addr_bytes)),
@@ -22,7 +24,7 @@ impl ProtocolAddress {
         }
     }
 
-    pub fn addr(&self) -> &[u8] {
+    pub fn addr_bytes(&self) -> &[u8] {
         match self {
             ProtocolAddress::IPv4(addr) => addr.addr_bytes(),
             // TODO
@@ -64,7 +66,7 @@ impl fmt::Display for ProtocolAddress {
     }
 }
 
-#[derive(Debug,Clone,PartialEq,Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HardwareAddress {
     MAC(MacAddress),
 }
@@ -79,7 +81,7 @@ impl HardwareAddress {
         }
     }
 
-    pub fn addr(&self) -> &[u8] {
+    pub fn addr_bytes(&self) -> &[u8] {
         match self {
             HardwareAddress::MAC(addr) => addr.addr_bytes(),
         }
@@ -112,7 +114,7 @@ impl fmt::Display for HardwareAddress {
     }
 }
 
-#[derive(Debug,Copy,Clone,PartialEq,Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct IPv4Address(pub [u8; 4]);
 
 impl IPv4Address {
@@ -125,7 +127,7 @@ impl TryFrom<&[u8]> for IPv4Address {
     type Error = AddressError;
     fn try_from(bytes: &[u8]) -> Result<IPv4Address, Self::Error> {
         if bytes.len() != 4 {
-            return Err(AddressError::NotEnoughOctets)
+            return Err(AddressError::NotEnoughOctets);
         }
 
         let mut byte_array: [u8; 4] = [0; 4];
@@ -171,7 +173,7 @@ impl fmt::Display for IPv4Address {
     }
 }
 
-#[derive(Debug,Clone,PartialEq,Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacAddress(pub [u8; 6]);
 
 impl MacAddress {
@@ -182,7 +184,7 @@ impl MacAddress {
 
 impl From<&[u8]> for MacAddress {
     fn from(bytes: &[u8]) -> Self {
-        if bytes.len() != 4 {
+        if bytes.len() != 6 {
             //TODO: Handle errors
             panic!("Wrong")
         }
@@ -194,26 +196,29 @@ impl From<&[u8]> for MacAddress {
     }
 }
 
-impl From<&str> for MacAddress {
-    fn from(str: &str) -> Self {
-        let bytes = str
-            .split("-")
-            .map(|oct| {
-                String::from(oct)
-                    .parse::<u8>()
-                    .expect("Error converting MAC address to bytes")
-            })
-            .collect::<Vec<u8>>();
+impl TryFrom<&str> for MacAddress {
+    type Error = AddressError;
 
-        if bytes.len() != 6 {
-            //TODO: Handle errors
-            panic!("Wrong")
+    fn try_from(str: &str) -> Result<Self, AddressError> {
+        let str_split = str.split("-").collect::<Vec<&str>>();
+        let res: Result<Vec<u8>, ParseIntError> = (0..str_split.len())
+            .map(|i| u8::from_str_radix(&str_split[i], 16))
+            .collect();
+
+        match res {
+            Ok(bytes) => {
+                if bytes.len() != 6 {
+                    //TODO: Handle errors
+                    panic!("Wrong")
+                } else {
+                    let mut byte_array: [u8; 6] = [0; 6];
+                    byte_array.copy_from_slice(&bytes);
+
+                    return Ok(MacAddress(byte_array));
+                }
+            }
+            Err(_) => return Err(AddressError::ConvertionFailed),
         }
-
-        let mut byte_array: [u8; 6] = [0; 6];
-        byte_array.copy_from_slice(&bytes);
-
-        MacAddress(byte_array)
     }
 }
 
@@ -230,5 +235,5 @@ impl fmt::Display for MacAddress {
     }
 }
 
-#[derive(Debug,Clone,PartialEq,Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IPv6Address(String);

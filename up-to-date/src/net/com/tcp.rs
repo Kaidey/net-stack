@@ -5,8 +5,8 @@ use std::{
     time::Instant,
 };
 
-use crate::crypto;
-use crate::net::com::utils;
+use crate::net::com::{address::IPv4Address, utils};
+use crate::{crypto, net::com::PduPayload};
 
 pub struct Clock(Instant);
 
@@ -149,10 +149,11 @@ pub struct Segment {
 }
 
 impl Segment {
+    pub const CODEPOINT: u8 = 0x06;
     pub fn new(
-        src_ip: &[u8],
+        src_ip: IPv4Address,
         src_port: u16,
-        dest_ip: &[u8],
+        dest_ip: IPv4Address,
         dest_port: u16,
         flags: Flags,
         payload: Vec<u8>,
@@ -173,9 +174,9 @@ impl Segment {
             payload: payload,
         }
         .gen_isn(
-            &src_ip,
+            &src_ip.addr_bytes(),
             &src_port.to_be_bytes(),
-            &dest_ip,
+            &dest_ip.addr_bytes(),
             &dest_port.to_be_bytes(),
             crypto::SECRET.bytes(),
         )
@@ -237,10 +238,16 @@ impl Segment {
         self
     }
 
-    pub fn checksum(mut self, src_ip: &[u8], dest_ip: &[u8], proto: u8) -> Self {
+    pub fn checksum(
+        mut self,
+        src_ip: &[u8],
+        dest_ip: &[u8],
+        proto: u8,
+    ) -> Result<Self, SegmentError> {
         let mut bytes_for_checksum: Vec<u8> = Vec::new();
 
-        let segment_as_bytes: Vec<u8> = Vec::from(&self);
+        let segment_as_bytes: Vec<u8> =
+            Vec::try_from(&self).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
 
         // Pseudo-header
         bytes_for_checksum.extend_from_slice(src_ip);
@@ -263,12 +270,48 @@ impl Segment {
 
         self.checksum = checksum;
 
-        self
+        Ok(self)
     }
 }
 
-impl From<&Segment> for Vec<u8> {
-    fn from(segment: &Segment) -> Self {
+// TODO: Error handling
+pub enum SegmentError {
+    InvalidTcpSegment,
+    ProtocolMismatch,
+}
+
+impl PduPayload for Segment {
+    type Payload = Segment;
+    type ErrorSpace = SegmentError;
+    type CodepointType = u8;
+
+    fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace> {
+        let vec = Vec::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
+        Ok(vec)
+    }
+
+    fn deserialize_payload(
+        cp: Self::CodepointType,
+        payload: &[u8],
+    ) -> Result<Self::Payload, Self::ErrorSpace> {
+        if cp != Self::CODEPOINT {
+            return Err(SegmentError::ProtocolMismatch);
+        }
+        let seg = Segment::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
+        Ok(seg)
+    }
+    fn codepoint(_payload: &Self::Payload) -> Self::CodepointType {
+        Self::CODEPOINT
+    }
+    fn name() -> String {
+        String::from("TCP")
+    }
+}
+
+impl TryFrom<&Segment> for Vec<u8> {
+    type Error = SegmentError;
+
+    fn try_from(segment: &Segment) -> Result<Self, Self::Error> {
         let mut bytes: Vec<u8> = Vec::new();
 
         // Divide hlen by 4 since header length field is calculated in 32-bit words
@@ -285,12 +328,14 @@ impl From<&Segment> for Vec<u8> {
         bytes.extend_from_slice(&segment.opts);
         bytes.extend_from_slice(&segment.payload);
 
-        bytes
+        Ok(bytes)
     }
 }
 
-impl From<&[u8]> for Segment {
-    fn from(buffer: &[u8]) -> Self {
+impl TryFrom<&[u8]> for Segment {
+    type Error = SegmentError;
+
+    fn try_from(buffer: &[u8]) -> Result<Self, Self::Error> {
         let hlen_rsv_flags_word: u16 = u16::from_be_bytes([buffer[12], buffer[13]]);
 
         let hlen_in_32bit_words: usize = (hlen_rsv_flags_word >> 12) as usize;
@@ -312,7 +357,7 @@ impl From<&[u8]> for Segment {
             payload: buffer[hlen_in_bytes..].to_vec(),
         };
 
-        segment
+        Ok(segment)
     }
 }
 
