@@ -200,16 +200,46 @@ impl TryFrom<&str> for MacAddress {
     type Error = AddressError;
 
     fn try_from(str: &str) -> Result<Self, AddressError> {
-        let str_split = str.split("-").collect::<Vec<&str>>();
-        let res: Result<Vec<u8>, ParseIntError> = (0..str_split.len())
-            .map(|i| u8::from_str_radix(&str_split[i], 16))
-            .collect();
+        let mut res: Result<Vec<u8>, AddressError> = Err(AddressError::ConvertionFailed);
+
+        if str.len() == 0 {
+            return Err(AddressError::NotEnoughOctets);
+        }
+
+        let str_no_term_char = str.replace("\n", "").as_str().to_owned();
+
+        let divider: &str = if str_no_term_char.contains("-") {
+            "-"
+        } else if str_no_term_char.contains(":") {
+            ":"
+        } else {
+            ""
+        };
+
+        // XX-XX-XX-XX-XX-XX or XX:XX:XX:XX:XX:XX
+        if divider.is_empty() == false {
+            let str_split = str_no_term_char.split(divider).collect::<Vec<&str>>();
+            res = (0..str_split.len())
+                .map(|i| {
+                    u8::from_str_radix(&str_split[i], 16)
+                        .map_err(|_| AddressError::ConvertionFailed)
+                })
+                .collect();
+        // XXXXXXXXXXXX
+        } else {
+            res = (0..str_no_term_char.len())
+                .step_by(2)
+                .map(|i| {
+                    u8::from_str_radix(&str_no_term_char[i..i + 1], 16)
+                        .map_err(|_| AddressError::ConvertionFailed)
+                })
+                .collect();
+        }
 
         match res {
             Ok(bytes) => {
                 if bytes.len() != 6 {
-                    //TODO: Handle errors
-                    panic!("Wrong")
+                    return Err(AddressError::NotEnoughOctets);
                 } else {
                     let mut byte_array: [u8; 6] = [0; 6];
                     byte_array.copy_from_slice(&bytes);
@@ -229,7 +259,7 @@ impl fmt::Display for MacAddress {
             .iter()
             .map(|b| format!("{:02X}", b))
             .collect::<Vec<String>>()
-            .join("-");
+            .join(":");
 
         write!(f, "{}", as_str)
     }

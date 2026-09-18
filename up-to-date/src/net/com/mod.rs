@@ -87,6 +87,7 @@ pub fn run_arp(
         let eth_type = u16::from_be_bytes([buffer[12], buffer[13]]);
 
         match eth_type {
+            // TODO: Review, maybe swap to Enum
             0x0806 => {
                 let inbound_frame =
                     EthernetFrame::<arp::Datagram>::try_from(buffer.as_slice()).ok()?;
