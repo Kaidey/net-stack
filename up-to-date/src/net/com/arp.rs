@@ -28,10 +28,10 @@ impl fmt::Display for Operation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Datagram {
-    pub src_hardware_addr: address::HardwareAddress,
-    pub dest_hardware_addr: address::HardwareAddress,
-    pub src_proto_addr: address::ProtocolAddress,
-    pub dest_proto_addr: address::ProtocolAddress,
+    pub src_hardware_addr: HardwareAddress,
+    pub dest_hardware_addr: HardwareAddress,
+    pub src_proto_addr: ProtocolAddress,
+    pub dest_proto_addr: ProtocolAddress,
     pub op: Operation,
     // TODO: Leave padding to Ethernet Frame
 }
@@ -39,10 +39,10 @@ pub struct Datagram {
 impl Datagram {
     pub const CODEPOINT: u16 = 0x0806;
     pub fn new(
-        src_hardware_addr: address::HardwareAddress,
-        dest_hardware_addr: address::HardwareAddress,
-        src_proto_addr: address::ProtocolAddress,
-        dest_proto_addr: address::ProtocolAddress,
+        src_hardware_addr: HardwareAddress,
+        dest_hardware_addr: HardwareAddress,
+        src_proto_addr: ProtocolAddress,
+        dest_proto_addr: ProtocolAddress,
         operation: Operation,
     ) -> Self {
         let datagram = Self {

@@ -5,8 +5,8 @@ use core::fmt;
 pub enum EtherPayload {
     IPv4(ipv4::IPv4Payload),
     // IPv6,
-    Arp(EthernetFrame<arp::Datagram>),
-    Unknown(EthernetFrame<UnknownPayload>),
+    Arp(Frame<arp::Datagram>),
+    Unknown(Frame<UnknownPayload>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,7 +48,7 @@ impl fmt::Display for UnknownPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EthernetFrame<P>
+pub struct Frame<P>
 where
     P: PduPayload,
 {
@@ -57,7 +57,7 @@ where
     pub payload: P::Payload,
 }
 
-impl<P: PduPayload<CodepointType = u16>> EthernetFrame<P> {
+impl<P: PduPayload<CodepointType = u16>> Frame<P> {
     pub fn new(
         dest_mac_address: MacAddress,
         src_mac_address: MacAddress,
@@ -71,10 +71,10 @@ impl<P: PduPayload<CodepointType = u16>> EthernetFrame<P> {
     }
 }
 
-impl<P: PduPayload<CodepointType = u16>> TryFrom<&EthernetFrame<P>> for Vec<u8> {
+impl<P: PduPayload<CodepointType = u16>> TryFrom<&Frame<P>> for Vec<u8> {
     type Error = FrameError;
 
-    fn try_from(frame: &EthernetFrame<P>) -> Result<Self, Self::Error> {
+    fn try_from(frame: &Frame<P>) -> Result<Self, Self::Error> {
         let mut bytes = Vec::new();
 
         bytes.extend_from_slice(&frame.dest_mac_address.addr_bytes());
@@ -89,7 +89,7 @@ impl<P: PduPayload<CodepointType = u16>> TryFrom<&EthernetFrame<P>> for Vec<u8> 
     }
 }
 
-impl<P: PduPayload<CodepointType = u16>> TryFrom<&[u8]> for EthernetFrame<P> {
+impl<P: PduPayload<CodepointType = u16>> TryFrom<&[u8]> for Frame<P> {
     type Error = FrameError;
 
     fn try_from(buffer: &[u8]) -> Result<Self, Self::Error> {
@@ -109,7 +109,7 @@ impl<P: PduPayload<CodepointType = u16>> TryFrom<&[u8]> for EthernetFrame<P> {
     }
 }
 
-impl<P: PduPayload<CodepointType = u16>> fmt::Display for EthernetFrame<P> {
+impl<P: PduPayload<CodepointType = u16>> fmt::Display for Frame<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "\nDestination MAC: {}", self.dest_mac_address)?;
         write!(f, "\nSource MAC: {}", self.src_mac_address)?;

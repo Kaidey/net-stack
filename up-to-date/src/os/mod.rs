@@ -1,5 +1,6 @@
 use libc;
 use std::{
+    error::Error,
     fs,
     io::{self, Read},
     ptr,
@@ -16,7 +17,101 @@ pub fn drop_root_privilege() {
     }
 }
 
-pub fn get_itf_mac_address(target_itf_name: &str) -> Result<Option<String>, io::Error> {
+// TODO: Review functions below, try to make the return types consistent and addept net::address
+// methods
+
+pub fn get_default_gateway_ipv4_addr() -> Result<Option<Vec<u8>>, io::Error> {
+    let current_os = std::env::consts::OS;
+
+    // TODO: Windows
+    if current_os == "linux" {
+        let routes_dir = std::path::Path::new("/proc/net/");
+        let routes_file_path = routes_dir.join("route");
+
+        let mut routes: fs::File =
+            fs::File::open(routes_file_path).or_else(|_| Err(io::Error::last_os_error()))?;
+        let mut file_content = String::new();
+        routes
+            .read_to_string(&mut file_content)
+            .or_else(|_| Err(io::Error::last_os_error()))?;
+
+        if file_content.len() == 0 {
+            return Ok(None);
+        }
+
+        // IMPORTANT: The following code is tightly coupled with the structure of the file
+        // /proc/net/routes and, based on that, makes several assumptions about the contents of
+        // file_content
+
+        // Remove every tab and whitespace in the file contents, replacing them with '-' so we can
+        // split and get all separate char sequences in a vec
+        let whitespace_replacer = "-";
+        let file_content_no_ws = file_content
+            .replace('\t', whitespace_replacer)
+            .replace(" ", "");
+
+        // Split file contents into separate lines
+        let lines = file_content_no_ws.split("\n");
+
+        // Will hold the column number (starting at 0) of the column that contains the char
+        // sequence 'Gateway'
+        let mut lookup_col_num = 0;
+
+        for line in lines {
+            // Split each line based on the char we used to replace all white space
+            // This gives us a list of all contiguous char sequences
+            let mut line_split = line.split(whitespace_replacer);
+
+            // Find index of the char sequence 'Gateway' if the line contains it. This will allows
+            // us to check only that index in the actual route lines, which will contain 0 or the
+            // Gateway IPv4 addr
+            if line.contains("Gateway") {
+                let gateway_addr_column_res = line_split.position(|s| s == "Gateway");
+                match gateway_addr_column_res {
+                    Some(col_num) => lookup_col_num = col_num,
+                    None => return Ok(None),
+                }
+            } else {
+                if lookup_col_num != 0 {
+                    // On lines beyond the first, get the value on the same column as 'Gateway'
+                    let lookup_res = line_split.nth(lookup_col_num);
+                    match lookup_res {
+                        Some(addr_str) => {
+                            if addr_str != "00000000" {
+                                // Convert hex string to hex bytes 'AB12C4D8' -> [0xAB, 0x12, 0xC4,
+                                // 0xD8]
+                                let res: Result<Vec<u8>, io::Error> = (0..addr_str.len())
+                                    .step_by(2)
+                                    .map(|i| {
+                                        u8::from_str_radix(&addr_str[i..i + 2], 16)
+                                            .map_err(|_| io::Error::last_os_error())
+                                    })
+                                    .collect();
+                                match res {
+                                    Ok(mut bytes) => {
+                                        if bytes.len() != 4 {
+                                            return Ok(None)
+                                        } else {
+                                            // Reverse byte array, as the addresses are represented
+                                            // in Little Endian on the routes file
+                                            bytes.reverse();
+                                            return Ok(Some(bytes));
+                                        }
+                                    }
+                                    Err(err) => return Err(err),
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub fn get_itf_mac_addr(target_itf_name: &str) -> Result<Option<String>, io::Error> {
     let current_os = std::env::consts::OS;
 
     // TODO: Windows
@@ -27,6 +122,7 @@ pub fn get_itf_mac_address(target_itf_name: &str) -> Result<Option<String>, io::
 
         // Each interface will have their own sys/class/net/<itf_name>
         let itf_dirs: Vec<String> = dir_content_iter
+            // Filters out any Result<DirEntry, Error> that evaluate to Err
             .filter_map(|ent_res| ent_res.ok())
             .map(|ent| ent.file_name().into_string().unwrap())
             .collect::<Vec<String>>();
@@ -48,7 +144,7 @@ pub fn get_itf_mac_address(target_itf_name: &str) -> Result<Option<String>, io::
     Ok(None)
 }
 
-pub fn get_itf_ipv4_address(target_itf_name: &str) -> Result<Option<[u8; 4]>, io::Error> {
+pub fn get_itf_ipv4_addr(target_itf_name: &str) -> Result<Option<[u8; 4]>, io::Error> {
     let current_os = std::env::consts::OS;
 
     // TODO: Windows
@@ -79,6 +175,7 @@ pub fn get_itf_ipv4_address(target_itf_name: &str) -> Result<Option<[u8; 4]>, io
                                 let addr_bytes = (*ip_sockaddr_ptr).sin_addr.s_addr.to_ne_bytes();
                                 return Ok(Some(addr_bytes));
                             }
+                            // libc::AF_INET& -> IPv6 address family
                             _ => {}
                         }
                     }

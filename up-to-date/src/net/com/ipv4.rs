@@ -224,15 +224,15 @@ where
     src_addr: IPv4Address,
     dest_addr: IPv4Address,
     opts: Vec<u8>,
-    payload: P::Payload,
+    pub payload: P::Payload,
 }
 
 impl<P: PduPayload<CodepointType = u8>> Datagram<P> {
     pub const CODEPOINT: u16 = 0x0800;
 
     pub fn new(
-        src_addr: IPv4Address,
-        dest_addr: IPv4Address,
+        src_ip: IPv4Address,
+        dest_ip: IPv4Address,
         payload: P::Payload,
     ) -> Result<Self, DatagramError> {
         let default_hlen: usize = 20;
@@ -256,8 +256,8 @@ impl<P: PduPayload<CodepointType = u8>> Datagram<P> {
             fragment_offset: 0,
             ttl: 128, // recommended defaults are 64 (Linux), 128 (Win), 255 (Net devices)
             checksum: 0,
-            src_addr: src_addr,
-            dest_addr: dest_addr,
+            src_addr: src_ip,
+            dest_addr: dest_ip,
             opts: vec![],
             payload: payload,
         })

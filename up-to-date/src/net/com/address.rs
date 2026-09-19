@@ -180,6 +180,14 @@ impl MacAddress {
     pub fn addr_bytes(&self) -> &[u8] {
         &self.0
     }
+
+    pub fn broadcast() -> Self{
+        Self([0,0,0,0,0,0])
+    }
+
+    pub fn is_broadcast(&self) -> bool{
+        self.0 == [0,0,0,0,0,0]
+    }
 }
 
 impl From<&[u8]> for MacAddress {

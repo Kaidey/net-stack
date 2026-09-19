@@ -134,8 +134,8 @@ impl BitOrAssign for Flags {
 pub struct Segment {
     src_port: u16,
     dest_port: u16,
-    seq_num: u32,
-    ack_num: u32,
+    pub seq_num: u32,
+    pub ack_num: u32,
     // In the struct, header length will be used as the total byte count instead of the 32-bit word
     // count for simplicity. Convertion will happen when transforming a struct instance into a byte
     // stream and when creating an instance from a byte stream
@@ -157,10 +157,10 @@ impl Segment {
         dest_port: u16,
         flags: Flags,
         payload: Vec<u8>,
-    ) -> Self {
+    ) -> Result<Self, SegmentError> {
         let default_hlen = 20;
 
-        Self {
+        Ok(Self {
             src_port: src_port,
             dest_port: dest_port,
             seq_num: 0,
@@ -179,7 +179,7 @@ impl Segment {
             &dest_ip.addr_bytes(),
             &dest_port.to_be_bytes(),
             crypto::SECRET.bytes(),
-        )
+        ))
     }
 
     pub fn ack(mut self, ack_num: u32) -> Self {
@@ -240,8 +240,8 @@ impl Segment {
 
     pub fn checksum(
         mut self,
-        src_ip: &[u8],
-        dest_ip: &[u8],
+        src_ip: IPv4Address,
+        dest_ip: IPv4Address,
         proto: u8,
     ) -> Result<Self, SegmentError> {
         let mut bytes_for_checksum: Vec<u8> = Vec::new();
@@ -250,8 +250,8 @@ impl Segment {
             Vec::try_from(&self).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
 
         // Pseudo-header
-        bytes_for_checksum.extend_from_slice(src_ip);
-        bytes_for_checksum.extend_from_slice(dest_ip);
+        bytes_for_checksum.extend_from_slice(src_ip.addr_bytes());
+        bytes_for_checksum.extend_from_slice(dest_ip.addr_bytes());
         bytes_for_checksum.push(0x00);
         bytes_for_checksum.push(proto);
         bytes_for_checksum.extend_from_slice(&(segment_as_bytes.len() as u16).to_be_bytes());
@@ -379,7 +379,7 @@ impl fmt::Display for Segment {
         write!(f, "\nUrgent Pointer: {:X}", self.urgent_ptr)?;
         //TODO: Options parser
         write!(f, "\nOptions: {:X?}", self.opts)?;
-        write!(f, "\nPayload: {:X?}", self.payload)?;
+        // write!(f, "\nPayload: {:X?}", self.payload)?;
 
         Ok(())
     }
