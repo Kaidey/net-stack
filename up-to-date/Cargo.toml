@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 libc = "0.2.180"
 nix = "0.31.1"
+getrandom = "0.3"

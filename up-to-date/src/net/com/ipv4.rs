@@ -221,8 +221,9 @@ where
     fragment_offset: u16,
     ttl: u8,
     checksum: u16,
-    src_addr: IPv4Address,
-    dest_addr: IPv4Address,
+    //TODO: USe getter()?
+    pub src_ip: IPv4Address,
+    pub dest_ip: IPv4Address,
     opts: Vec<u8>,
     pub payload: P::Payload,
 }
@@ -256,8 +257,8 @@ impl<P: PduPayload<CodepointType = u8>> Datagram<P> {
             fragment_offset: 0,
             ttl: 128, // recommended defaults are 64 (Linux), 128 (Win), 255 (Net devices)
             checksum: 0,
-            src_addr: src_ip,
-            dest_addr: dest_ip,
+            src_ip: src_ip,
+            dest_ip: dest_ip,
             opts: vec![],
             payload: payload,
         })
@@ -363,8 +364,8 @@ impl<P: PduPayload<CodepointType = u8>> TryFrom<&Datagram<P>> for Vec<u8> {
         bytes.push(datagram.ttl);
         bytes.push(P::codepoint(&datagram.payload));
         bytes.extend_from_slice(&datagram.checksum.to_be_bytes());
-        bytes.extend_from_slice(&datagram.src_addr.addr_bytes());
-        bytes.extend_from_slice(&datagram.dest_addr.addr_bytes());
+        bytes.extend_from_slice(&datagram.src_ip.addr_bytes());
+        bytes.extend_from_slice(&datagram.dest_ip.addr_bytes());
         bytes.extend_from_slice(&datagram.opts);
         let serialized_payload = P::serialize_payload(&datagram.payload)
             .or_else(|_| Err(DatagramError::PayloadWrong))?;
@@ -382,8 +383,8 @@ impl<P: PduPayload<CodepointType = u8>> TryFrom<&[u8]> for Datagram<P> {
         let hlen_in_bytes: usize = hlen_in_32bit_words * 4;
         let total_len: usize = u16::from_be_bytes([buffer[2], buffer[3]]) as usize;
 
-        let src_addr = IPv4Address::try_from(&buffer[12..16])?;
-        let dest_addr = IPv4Address::try_from(&buffer[16..20])?;
+        let src_ip = IPv4Address::try_from(&buffer[12..16])?;
+        let dest_ip = IPv4Address::try_from(&buffer[16..20])?;
 
         Ok(Self {
             version: buffer[0] >> 4,
@@ -396,8 +397,8 @@ impl<P: PduPayload<CodepointType = u8>> TryFrom<&[u8]> for Datagram<P> {
             fragment_offset: u16::from_be_bytes([buffer[6] & 0x1F, buffer[7]]),
             ttl: buffer[8],
             checksum: u16::from_be_bytes([buffer[10], buffer[11]]),
-            src_addr: src_addr,
-            dest_addr: dest_addr,
+            src_ip: src_ip,
+            dest_ip: dest_ip,
             // TODO: Option parser
             opts: buffer[20..hlen_in_bytes].to_vec(),
             // buffer[9] is the next protocol field aka the protocol codepoint
@@ -428,8 +429,8 @@ impl<P: PduPayload<CodepointType = u8>> fmt::Display for Datagram<P> {
             P::codepoint(&self.payload)
         )?;
         write!(f, "\nChecksum: {:04X}", self.checksum)?;
-        write!(f, "\nSource Address: {}", self.src_addr)?;
-        write!(f, "\nDestination Address: {}", self.dest_addr)?;
+        write!(f, "\nSource Address: {}", self.src_ip)?;
+        write!(f, "\nDestination Address: {}", self.dest_ip)?;
         // TODO: Option parser
         write!(f, "\nOptions: {:X?}", self.opts)?;
         // Review/Test

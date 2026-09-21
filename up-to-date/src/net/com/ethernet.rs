@@ -79,7 +79,6 @@ impl<P: PduPayload<CodepointType = u16>> TryFrom<&Frame<P>> for Vec<u8> {
 
         bytes.extend_from_slice(&frame.dest_mac_address.addr_bytes());
         bytes.extend_from_slice(&frame.src_mac_address.addr_bytes());
-        // bytes.extend_from_slice(&u16::from(&value.type_or_length).to_be_bytes());
         bytes.extend_from_slice(&P::codepoint(&frame.payload).to_be_bytes());
         let serialized_payload =
             P::serialize_payload(&frame.payload).or_else(|_| Err(FrameError::FrameBad))?;
@@ -111,8 +110,8 @@ impl<P: PduPayload<CodepointType = u16>> TryFrom<&[u8]> for Frame<P> {
 
 impl<P: PduPayload<CodepointType = u16>> fmt::Display for Frame<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "\nDestination MAC: {}", self.dest_mac_address)?;
         write!(f, "\nSource MAC: {}", self.src_mac_address)?;
+        write!(f, "\nDestination MAC: {}", self.dest_mac_address)?;
         write!(
             f,
             "\nFrame Type/Length: {:04X?} ({})",

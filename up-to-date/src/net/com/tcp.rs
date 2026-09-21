@@ -132,8 +132,8 @@ impl BitOrAssign for Flags {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
-    src_port: u16,
-    dest_port: u16,
+    pub src_port: u16,
+    pub dest_port: u16,
     pub seq_num: u32,
     pub ack_num: u32,
     // In the struct, header length will be used as the total byte count instead of the 32-bit word
@@ -167,7 +167,7 @@ impl Segment {
             ack_num: 0,
             hlen: default_hlen,
             flags: flags,
-            window: 0,
+            window: 0xFAF0,
             checksum: 0,
             urgent_ptr: 0,
             opts: vec![],
