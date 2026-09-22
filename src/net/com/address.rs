@@ -181,12 +181,16 @@ impl MacAddress {
         &self.0
     }
 
-    pub fn broadcast() -> Self{
-        Self([0,0,0,0,0,0])
+    pub fn broadcast() -> Self {
+        Self([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
     }
 
-    pub fn is_broadcast(&self) -> bool{
-        self.0 == [0,0,0,0,0,0]
+    pub fn all_zero() -> Self {
+        Self([0, 0, 0, 0, 0, 0])
+    }
+
+    pub fn is_all_zero(&self) -> bool {
+        self.0 == [0, 0, 0, 0, 0, 0]
     }
 }
 

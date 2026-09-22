@@ -20,10 +20,24 @@ pub fn drop_root_privilege() {
 // TODO: Review functions below, try to make the return types consistent and addept net::address
 // methods
 
+fn itf_is_up(itf: &str) -> bool {
+    fs::read_to_string(format!("/sys/class/net/{itf}/operstate"))
+        .map(|st| st.trim() == "up")
+        .unwrap_or(false)
+}
+
+pub fn get_active_wifi_interface() -> Result<Vec<String>, io::Error> {
+    let itfs: Vec<String> = fs::read_dir("/sys/class/net")?
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|itf| itf != "lo" && itf_is_up(itf))
+        .collect();
+
+    Ok(itfs)
+}
+
 pub fn get_default_gateway_ipv4_addr() -> Result<Option<Vec<u8>>, io::Error> {
     let current_os = std::env::consts::OS;
 
-    // TODO: Windows
     if current_os == "linux" {
         let routes_dir = std::path::Path::new("/proc/net/");
         let routes_file_path = routes_dir.join("route");
@@ -90,7 +104,7 @@ pub fn get_default_gateway_ipv4_addr() -> Result<Option<Vec<u8>>, io::Error> {
                                 match res {
                                     Ok(mut bytes) => {
                                         if bytes.len() != 4 {
-                                            return Ok(None)
+                                            return Ok(None);
                                         } else {
                                             // Reverse byte array, as the addresses are represented
                                             // in Little Endian on the routes file
@@ -114,7 +128,6 @@ pub fn get_default_gateway_ipv4_addr() -> Result<Option<Vec<u8>>, io::Error> {
 pub fn get_itf_mac_addr(target_itf_name: &str) -> Result<Option<String>, io::Error> {
     let current_os = std::env::consts::OS;
 
-    // TODO: Windows
     if current_os == "linux" {
         let net_dir = std::path::Path::new("/sys/class/net");
         let dir_content_iter =
@@ -147,7 +160,6 @@ pub fn get_itf_mac_addr(target_itf_name: &str) -> Result<Option<String>, io::Err
 pub fn get_itf_ipv4_addr(target_itf_name: &str) -> Result<Option<[u8; 4]>, io::Error> {
     let current_os = std::env::consts::OS;
 
-    // TODO: Windows
     if current_os == "linux" {
         unsafe {
             // Init null pointer

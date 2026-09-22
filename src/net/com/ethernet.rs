@@ -79,6 +79,7 @@ impl<P: PduPayload<CodepointType = u16>> TryFrom<&Frame<P>> for Vec<u8> {
 
         bytes.extend_from_slice(&frame.dest_mac_address.addr_bytes());
         bytes.extend_from_slice(&frame.src_mac_address.addr_bytes());
+        // EtherType
         bytes.extend_from_slice(&P::codepoint(&frame.payload).to_be_bytes());
         let serialized_payload =
             P::serialize_payload(&frame.payload).or_else(|_| Err(FrameError::FrameBad))?;

@@ -13,8 +13,6 @@ use crate::net::com::{ethernet, ipv4, tcp};
 // use crate::net::com::{address, arp, ethernet, ipv4, run_arp, tcp};
 use crate::os;
 
-const DEFAULT_NET_ITF: &str = "eth1";
-
 // TODO: Impl TcpListener
 
 pub struct TcpConnection {
@@ -64,9 +62,15 @@ impl TcpConnection {
         //     .collect::<Option<Vec<u32>>>()
         //     .ok_or(TcpError::InvalidPort)?;
 
-        // Get IPv4 addr of net interface DEFAULT_NET_ITF
+        let target_itf = os::get_active_wifi_interface()
+            .unwrap()
+            .first()
+            .unwrap()
+            .to_owned();
+
+        // Get IPv4 addr of net interface target_itf
         let src_ip_res: Option<[u8; 4]> =
-            os::get_itf_ipv4_addr(DEFAULT_NET_ITF).map_err(|_| TcpError::GetSourceIp)?;
+            os::get_itf_ipv4_addr(&target_itf).map_err(|_| TcpError::GetSourceIp)?;
         let src_ip = match src_ip_res {
             Some(ip) => {
                 IPv4Address::try_from(ip.as_slice()).or_else(|_| Err(TcpError::GetSourceIp))?
@@ -74,9 +78,9 @@ impl TcpConnection {
             None => return Err(TcpError::GetSourceIp),
         };
 
-        // Get MAC addr of net interface DEFAULT_NET_ITF
+        // Get MAC addr of net interface target_itf
         let src_mac_res: Option<String> =
-            os::get_itf_mac_addr(DEFAULT_NET_ITF).map_err(|_| TcpError::GetSourceMac)?;
+            os::get_itf_mac_addr(&target_itf).map_err(|_| TcpError::GetSourceMac)?;
         let src_mac = match src_mac_res {
             Some(mac) => {
                 MacAddress::try_from(mac.as_str()).or_else(|_| Err(TcpError::GetSourceMac))?
@@ -84,8 +88,8 @@ impl TcpConnection {
             None => return Err(TcpError::GetSourceMac),
         };
 
-        let sock_fd = socket::new_socket(Some(DEFAULT_NET_ITF));
-        let mut dest_mac = MacAddress::broadcast();
+        let sock_fd = socket::new_socket(&target_itf);
+        let dest_mac;
 
         // TODO: Check if remote IP is LAN
         let is_lan = false;
@@ -119,11 +123,11 @@ impl TcpConnection {
             }
         }
 
-        if dest_mac == MacAddress::broadcast() {
+        if dest_mac == MacAddress::all_zero() {
             return Err(TcpError::ArpFailed);
         }
 
-        tcp_handshake(sock_fd, src_mac, dest_mac, src_ip, dest_ip, 0x01bb, 0x0050).unwrap();
+        tcp_handshake(sock_fd, src_mac, dest_mac, src_ip, dest_ip, 0xFDE8, 0x0050).unwrap();
 
         Err(TcpError::InvalidAddress)
     }
@@ -323,17 +327,15 @@ pub fn run_arp(
     dest_ip: IPv4Address,
 ) -> Option<[u8; 6]> {
     // TODO: Error handling
-    let dest_mac = MacAddress::broadcast();
-
     let arp_datagram = arp::Datagram::new(
         HardwareAddress::MAC(src_mac.clone()),
-        HardwareAddress::MAC(dest_mac.clone()),
+        HardwareAddress::MAC(MacAddress::all_zero()),
         ProtocolAddress::IPv4(src_ip.clone()),
         ProtocolAddress::IPv4(dest_ip.clone()),
         arp::Operation::REQUEST,
     );
 
-    let outbound_frame = Frame::<arp::Datagram>::new(dest_mac, src_mac, arp_datagram);
+    let outbound_frame = Frame::<arp::Datagram>::new(MacAddress::broadcast(), src_mac, arp_datagram);
 
     let frame_as_bytes = Vec::try_from(&outbound_frame).expect("Wrong");
 

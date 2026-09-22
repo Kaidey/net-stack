@@ -170,22 +170,22 @@ impl fmt::Display for Datagram {
 
         write!(
             f,
-            "Source Hardware Address: {}",
+            "\nSource Hardware Address: {}",
             self.src_hardware_addr.addr_as_string()
         )?;
         write!(
             f,
-            "Source Protocol Address: {}",
+            "\nSource Protocol Address: {}",
             self.src_proto_addr.addr_as_string()
         )?;
         write!(
             f,
-            "Destination Hardware Address: {}",
+            "\nDestination Hardware Address: {}",
             self.dest_hardware_addr.addr_as_string()
         )?;
         write!(
             f,
-            "Destination Protocol Address: {}",
+            "\nDestination Protocol Address: {}",
             self.dest_proto_addr.addr_as_string()
         )?;
 

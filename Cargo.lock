@@ -39,6 +39,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
 
 [[package]]
+name = "netstack"
+version = "0.1.0"
+dependencies = [
+ "getrandom",
+ "libc",
+ "nix",
+]
+
+[[package]]
 name = "nix"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -55,15 +64,6 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
-
-[[package]]
-name = "up-to-date"
-version = "0.1.0"
-dependencies = [
- "getrandom",
- "libc",
- "nix",
-]
 
 [[package]]
 name = "wasip2"

@@ -1,11 +1,7 @@
 use libc::*;
 use std::{ffi::CString, mem::size_of, mem::zeroed};
 
-pub fn new_socket<T: Into<String>>(net_itf: Option<T>) -> i32 {
-    let itf: String = match net_itf {
-        Some(value) => value.into(),
-        None => String::from("eth0"),
-    };
+pub fn new_socket(net_itf: &str) -> i32 {
 
     // Linux kernel expects protocol parameter as Big Endian i32
     let sock_fd = unsafe { socket(AF_PACKET, SOCK_RAW, (ETH_P_ALL as u16).to_be() as i32) };
@@ -16,7 +12,7 @@ pub fn new_socket<T: Into<String>>(net_itf: Option<T>) -> i32 {
         );
     }
 
-    let itf_as_cstring = CString::new(itf).unwrap();
+    let itf_as_cstring = CString::new(net_itf).unwrap();
 
     interface_bind_packet_socket(sock_fd, itf_as_cstring);
 
