@@ -4,6 +4,8 @@ use crate::net::com::{
 };
 use core::fmt;
 
+pub const CODEPOINT: u16 = 0x0806;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Operation(u16);
 
@@ -37,7 +39,6 @@ pub struct Datagram {
 }
 
 impl Datagram {
-    pub const CODEPOINT: u16 = 0x0806;
     pub fn new(
         src_hardware_addr: HardwareAddress,
         dest_hardware_addr: HardwareAddress,
@@ -77,14 +78,14 @@ impl PduPayload for Datagram {
         cp: Self::CodepointType,
         payload: &[u8],
     ) -> Result<Self::Payload, Self::ErrorSpace> {
-        if cp != Self::CODEPOINT {
+        if cp != CODEPOINT {
             return Err(ArpError::ProtocolMismatch);
         }
         let seg = Datagram::try_from(payload).or_else(|_| Err(ArpError::InvalidDatagram))?;
         Ok(seg)
     }
     fn codepoint(_payload: &Self::Payload) -> Self::CodepointType {
-        Self::CODEPOINT
+        CODEPOINT
     }
     fn name() -> String {
         String::from("ARP")

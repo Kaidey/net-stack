@@ -2,6 +2,12 @@ mod crypto;
 mod net;
 mod os;
 
+// TODO: 
+// DSN Resolution
+// IPv4 Fragmentation
+// IPv4 and TCP Options
+// TCP LIstener
+
 fn main() {
     // Drop the kernel's RST-Block for unknown SYN/ACK
     // Raw Sockets operate along the Kernel's own IP/TCP stack, which means it parses,

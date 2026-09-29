@@ -29,6 +29,7 @@ impl Clock {
 // A LazyLock is a thread safe type that allows a value to be initialized on first access and then
 // provides thread-wide read access for the lifetime of the process
 static CLOCK: LazyLock<Clock> = LazyLock::new(Clock::new);
+pub const CODEPOINT: u8 = 0x06;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // Tuple struct. It has one unnamed field of type u16
@@ -149,7 +150,6 @@ pub struct Segment {
 }
 
 impl Segment {
-    pub const CODEPOINT: u8 = 0x06;
     pub fn new(
         src_ip: IPv4Address,
         src_port: u16,
@@ -294,14 +294,14 @@ impl PduPayload for Segment {
         cp: Self::CodepointType,
         payload: &[u8],
     ) -> Result<Self::Payload, Self::ErrorSpace> {
-        if cp != Self::CODEPOINT {
+        if cp != CODEPOINT {
             return Err(SegmentError::ProtocolMismatch);
         }
         let seg = Segment::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
         Ok(seg)
     }
     fn codepoint(_payload: &Self::Payload) -> Self::CodepointType {
-        Self::CODEPOINT
+        CODEPOINT
     }
     fn name() -> String {
         String::from("TCP")

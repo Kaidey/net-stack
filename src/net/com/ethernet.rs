@@ -1,13 +1,13 @@
 use crate::net::com::{PduPayload, address::MacAddress, arp, ipv4};
 use core::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EtherPayload {
-    IPv4(ipv4::IPv4Payload),
-    // IPv6,
-    Arp(Frame<arp::Datagram>),
-    Unknown(Frame<UnknownPayload>),
-}
+// #[derive(Debug, Clone, PartialEq, Eq)]
+// pub enum EtherPayload {
+//     IPv4(ipv4::IPv4Payload),
+//     // IPv6,
+//     Arp(Frame<arp::Datagram>),
+//     Unknown(Frame<UnknownPayload>),
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameError {

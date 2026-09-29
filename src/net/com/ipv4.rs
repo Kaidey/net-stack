@@ -8,6 +8,7 @@ use crate::net::com::{
 
 // TODO: Review. This might be a problem for multi-thread
 static mut NEXT_ID: u16 = 0;
+pub const CODEPOINT: u16 = 0x0800;
 
 fn next_datagram_id() -> u16 {
     unsafe {
@@ -157,7 +158,7 @@ impl From<AddressError> for DatagramError {
     fn from(err: AddressError) -> Self {
         match err {
             AddressError::NotEnoughOctets => DatagramError::AddressParsingFailed,
-            AddressError::ConvertionFailed => DatagramError::AddressParsingFailed
+            AddressError::ConvertionFailed => DatagramError::AddressParsingFailed,
         }
     }
 }
@@ -229,8 +230,6 @@ where
 }
 
 impl<P: PduPayload<CodepointType = u8>> Datagram<P> {
-    pub const CODEPOINT: u16 = 0x0800;
-
     pub fn new(
         src_ip: IPv4Address,
         dest_ip: IPv4Address,
@@ -330,7 +329,7 @@ impl<P: PduPayload<CodepointType = u8>> PduPayload for Datagram<P> {
         cp: Self::CodepointType,
         payload: &[u8],
     ) -> Result<Self::Payload, Self::ErrorSpace> {
-        if cp != Self::CODEPOINT {
+        if cp != CODEPOINT {
             return Err(DatagramError::ProtocolMismatch);
         }
         let datag =
@@ -340,7 +339,7 @@ impl<P: PduPayload<CodepointType = u8>> PduPayload for Datagram<P> {
     }
 
     fn codepoint(_payload: &Self::Payload) -> Self::CodepointType {
-        Self::CODEPOINT
+        CODEPOINT
     }
     fn name() -> String {
         String::from("IPv4")
