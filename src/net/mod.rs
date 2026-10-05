@@ -19,10 +19,14 @@ const SRC_PORT: u16 = 0xFDE8;
 
 pub struct TcpConnection {
     sock_fd: i32,
+    src_mac: MacAddress,
+    dest_mac: MacAddress,
     src_ip: IPv4Address,
     src_port: u16,
     dest_ip: IPv4Address,
     dest_port: u16,
+    seq_num: u32,
+    ack_num: u32,
     state: TcpState,
 }
 
@@ -55,6 +59,7 @@ pub enum TcpError {
     ArpFailed,
     Handshake,
     UnclosedConnection,
+    CloseConnectionFailed,
 }
 
 impl TcpConnection {
@@ -151,16 +156,20 @@ impl TcpConnection {
         }
 
         let mut conn = Self {
+            src_mac: src_mac.clone(),
+            dest_mac: dest_mac.clone(),
             sock_fd: sock_fd,
             src_ip: src_ip,
-            src_port: 0x000,
+            src_port: SRC_PORT,
             dest_ip: dest_ip,
-            dest_port: 0x000,
+            dest_port: dest_port,
+            seq_num: 0,
+            ack_num: 0,
             state: TcpState::Closed,
         };
 
         let hdsk_res = tcp_handshake(
-            &mut conn, sock_fd, src_mac, dest_mac, src_ip, dest_ip, SRC_PORT, dest_port,
+            &mut conn, src_mac, dest_mac, src_ip, dest_ip, SRC_PORT, dest_port,
         );
 
         match hdsk_res {
@@ -175,6 +184,171 @@ impl TcpConnection {
             Err(_) => return Err(TcpError::Handshake),
         }
     }
+
+    pub fn close(mut self) -> Result<(), TcpError> {
+        let fin_tcp_segment = tcp::Segment::new(
+            self.src_ip,
+            self.src_port,
+            self.dest_ip,
+            self.dest_port,
+            tcp::Flags::FIN | tcp::Flags::ACK,
+            vec![],
+        )
+        .map_err(|_| TcpError::CloseConnectionFailed)?
+        .seq(self.seq_num)
+        .ack(self.ack_num)
+        .checksum(self.src_ip, self.dest_ip, tcp::CODEPOINT)
+        .map_err(|_| TcpError::CloseConnectionFailed)?;
+
+        let ip_datagram =
+            ipv4::Datagram::<tcp::Segment>::new(self.src_ip, self.dest_ip, fin_tcp_segment.clone())
+                .map_err(|_| TcpError::CloseConnectionFailed)?
+                .checksum()
+                .map_err(|_| TcpError::CloseConnectionFailed)?;
+
+        let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(
+            self.dest_mac.clone(),
+            self.src_mac.clone(),
+            ip_datagram,
+        );
+
+        let frame_as_bytes: Vec<u8> =
+            Vec::try_from(&frame).map_err(|_| TcpError::CloseConnectionFailed)?;
+
+        let bytes_sent = unsafe {
+            send(
+                self.sock_fd,
+                frame_as_bytes.as_ptr() as *const _,
+                frame_as_bytes.len(),
+                0,
+            )
+        };
+
+        if bytes_sent < 0 {
+            return Err(TcpError::CloseConnectionFailed);
+        } else {
+            self.state = TcpState::FinWait1
+        }
+
+        let mut buffer = [0u8; 65536];
+
+        while self.state != TcpState::Closed {
+            let frame_size = unsafe {
+                recv(
+                    self.sock_fd,
+                    buffer.as_mut_ptr() as *mut c_void,
+                    buffer.len(),
+                    0,
+                )
+            };
+
+            if frame_size < 0 {
+                return Err(TcpError::CloseConnectionFailed);
+            }
+
+            let eth_type = u16::from_be_bytes([buffer[12], buffer[13]]);
+            // Ethernet frame has 14 bytes of header. Next proto field is byte 10 (9 index) of an IPv4
+            // header
+            let next_proto_cp = buffer[14 + 9];
+
+            match eth_type {
+                ipv4::CODEPOINT => match next_proto_cp {
+                    tcp::CODEPOINT => {
+                        let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::try_from(
+                            buffer.as_slice(),
+                        )
+                        .map_err(|_| TcpError::Handshake)?;
+
+                        let eth_payload: &ipv4::Datagram<tcp::Segment> = &frame.payload;
+                        let ip_payload: &tcp::Segment = &eth_payload.payload;
+
+                        let is_from_remote = eth_payload.src_ip == self.dest_ip
+                            && eth_payload.dest_ip == self.src_ip
+                            && ip_payload.dest_port == self.src_port
+                            && ip_payload.src_port == self.dest_port;
+
+                        let is_expected_ack = ip_payload.ack_num == fin_tcp_segment.seq_num + 1;
+
+                        if is_from_remote {
+                            if is_expected_ack == false {
+                                return Err(TcpError::CloseConnectionFailed);
+                            }
+
+                            // All segments after handshake are expected to contain the ACK flag and
+                            // a valid ACK number
+                            let is_fin = ip_payload.flags.contains(tcp::Flags::FIN) && ip_payload.flags.contains(tcp::Flags::ACK);
+                            let is_ack_only = ip_payload.flags == tcp::Flags::ACK;
+
+                            // Sent our FIN and received ACK
+                            if is_ack_only && self.state == TcpState::FinWait1 {
+                                self.state = TcpState::FinWait2;
+                            } else if is_fin && self.state == TcpState::FinWait1 {
+                                // TODO: Send ACK
+                                self.state = TcpState::Closing;
+                            // Sent our FIN, received ACK, now receiving remote FIN
+                            } else if is_ack_only && self.state == TcpState::Closing {
+                                self.state = TcpState::TimeWait;
+                            } else if is_fin && self.state == TcpState::FinWait2 {
+                                let resp_tcp_segment = tcp::Segment::new(
+                                    self.src_ip,
+                                    self.src_port,
+                                    self.dest_ip,
+                                    self.dest_port,
+                                    tcp::Flags::ACK,
+                                    vec![],
+                                )
+                                .map_err(|_| TcpError::CloseConnectionFailed)?
+                                .seq(ip_payload.ack_num)
+                                .ack(ip_payload.seq_num + 1)
+                                .checksum(self.src_ip, self.dest_ip, tcp::CODEPOINT)
+                                .map_err(|_| TcpError::CloseConnectionFailed)?;
+
+                                let resp_ipv4_datagram = ipv4::Datagram::<tcp::Segment>::new(
+                                    self.src_ip,
+                                    self.dest_ip,
+                                    resp_tcp_segment.clone(),
+                                )
+                                .map_err(|_| TcpError::CloseConnectionFailed)?
+                                .checksum()
+                                .map_err(|_| TcpError::CloseConnectionFailed)?;
+
+                                let resp_frame =
+                                    ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(
+                                        self.dest_mac.clone(),
+                                        self.src_mac.clone(),
+                                        resp_ipv4_datagram,
+                                    );
+
+                                let resp_frame_as_bytes: Vec<u8> = Vec::try_from(&resp_frame)
+                                    .map_err(|_| TcpError::CloseConnectionFailed)?;
+
+                                let bytes_sent = unsafe {
+                                    send(
+                                        self.sock_fd,
+                                        resp_frame_as_bytes.as_ptr() as *const _,
+                                        resp_frame_as_bytes.len(),
+                                        0,
+                                    )
+                                };
+
+                                if bytes_sent < 0 {
+                                    return Err(TcpError::CloseConnectionFailed);
+                                }
+
+                                self.state = TcpState::TimeWait;
+                                // TODO: When those the connection transition from Time Wait to
+                                // Closed?
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+
+        return Ok(());
+    }
 }
 
 // TODO:
@@ -184,7 +358,6 @@ impl TcpConnection {
 // Confirmation of ACK reception?
 pub fn tcp_handshake(
     connection: &mut TcpConnection,
-    sock_fd: i32,
     src_mac: MacAddress,
     dest_mac: MacAddress,
     src_ip: IPv4Address,
@@ -219,7 +392,7 @@ pub fn tcp_handshake(
 
     let bytes_sent = unsafe {
         send(
-            sock_fd,
+            connection.sock_fd,
             frame_as_bytes.as_ptr() as *const _,
             frame_as_bytes.len(),
             0,
@@ -235,8 +408,14 @@ pub fn tcp_handshake(
     let mut buffer = [0u8; 65536];
 
     while connection.state != TcpState::Established && connection.state != TcpState::Closed {
-        let frame_size =
-            unsafe { recv(sock_fd, buffer.as_mut_ptr() as *mut c_void, buffer.len(), 0) };
+        let frame_size = unsafe {
+            recv(
+                connection.sock_fd,
+                buffer.as_mut_ptr() as *mut c_void,
+                buffer.len(),
+                0,
+            )
+        };
 
         if frame_size < 0 {
             return Err(TcpError::Handshake);
@@ -258,14 +437,16 @@ pub fn tcp_handshake(
                     let eth_payload: &ipv4::Datagram<tcp::Segment> = &frame.payload;
                     let ip_payload: &tcp::Segment = &eth_payload.payload;
 
-                    let is_from_remote = eth_payload.src_ip == dest_ip
+                    let is_synack_from_remote = eth_payload.src_ip == dest_ip
                         && eth_payload.dest_ip == src_ip
                         && ip_payload.dest_port == src_port
-                        && ip_payload.src_port == dest_port;
+                        && ip_payload.src_port == dest_port
+                        && ip_payload.flags.contains(tcp::Flags::ACK)
+                        && ip_payload.flags.contains(tcp::Flags::SYN);
 
                     let is_expected_ack = ip_payload.ack_num == syn_tcp_segment.seq_num + 1;
 
-                    if is_from_remote {
+                    if is_synack_from_remote {
                         if is_expected_ack == false {
                             return Err(TcpError::UnclosedConnection);
                         }
@@ -304,7 +485,7 @@ pub fn tcp_handshake(
 
                         let bytes_sent = unsafe {
                             send(
-                                sock_fd,
+                                connection.sock_fd,
                                 resp_frame_as_bytes.as_ptr() as *const _,
                                 resp_frame_as_bytes.len(),
                                 0,
@@ -316,6 +497,8 @@ pub fn tcp_handshake(
                         }
 
                         connection.state = TcpState::Established;
+                        connection.seq_num = ip_payload.ack_num;
+                        connection.ack_num = ip_payload.seq_num + 1;
                     }
                 }
                 _ => {}
@@ -326,6 +509,16 @@ pub fn tcp_handshake(
     return Ok(());
 }
 
+pub fn tcp_incoming_handler(segment: tcp::Segment) {
+
+    // Drop malformed segments or segments without ACK
+
+    // Handle incoming FIN
+
+    // Handle incoming RST
+    // Handle incoming SYN
+    // Handle incoming others
+}
 // let http_payload = "GET / HTTP/1.1\r\nHost: scanme.nmap.org\r\nConnection: close\r\n\r\n".to_string().into_bytes();
 //
 // let http_tcp = tcp::Segment::new(

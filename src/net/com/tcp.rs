@@ -141,7 +141,7 @@ pub struct Segment {
     // count for simplicity. Convertion will happen when transforming a struct instance into a byte
     // stream and when creating an instance from a byte stream
     hlen: usize,
-    flags: Flags,
+    pub flags: Flags,
     window: u16,
     checksum: u16,
     urgent_ptr: u16,

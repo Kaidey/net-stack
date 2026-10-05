@@ -2,7 +2,10 @@ mod crypto;
 mod net;
 mod os;
 
+use std;
+
 // TODO: 
+// Replace pub struct properties with getter methods or analogous
 // DSN Resolution
 // IPv4 Fragmentation
 // IPv4 and TCP Options
@@ -38,5 +41,10 @@ fn main() {
 
     let dest_addr = "45.33.32.156:80";
     let new_conn = net::TcpConnection::new(dest_addr).unwrap();
+
+    std::thread::sleep(std::time::Duration::from_secs(10));
+
+    new_conn.close().unwrap();
+    
     // os::drop_root_privilege();
 }
