@@ -6,6 +6,7 @@ use std;
 
 // TODO: 
 // Replace pub struct properties with getter methods or analogous
+// FIN retransmist for TCP Close and retransmits in genera
 // DSN Resolution
 // IPv4 Fragmentation
 // IPv4 and TCP Options

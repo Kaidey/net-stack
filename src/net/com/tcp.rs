@@ -146,7 +146,7 @@ pub struct Segment {
     checksum: u16,
     urgent_ptr: u16,
     opts: Vec<u8>,
-    payload: Vec<u8>,
+    pub payload: Vec<u8>,
 }
 
 impl Segment {

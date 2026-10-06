@@ -173,7 +173,7 @@ impl fmt::Display for IPv4Address {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct MacAddress(pub [u8; 6]);
 
 impl MacAddress {
