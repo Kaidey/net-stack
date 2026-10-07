@@ -18,7 +18,7 @@ use crate::os;
 // Port 65000 by default
 // TODO: Configurable
 const SRC_PORT: u16 = 0xFDE8;
-const TIME_WAIT: Duration = Duration::from_secs(10);
+const TIME_WAIT: Duration = Duration::from_secs(60);
 
 pub struct TcpConnection {
     sock_fd: i32,
@@ -129,8 +129,7 @@ impl TcpConnection {
 
         if is_lan {
             // If LAN -> ARP for remote IP and use remote MAC
-            let dest_mac_bytes =
-                run_arp(sock_fd, src_mac.clone(), src_ip.clone(), dest_ip.clone()).unwrap();
+            let dest_mac_bytes = run_arp(sock_fd, src_mac, src_ip, dest_ip).unwrap();
             dest_mac =
                 MacAddress::try_from(dest_mac_bytes.as_slice()).map_err(|_| TcpError::ArpFailed)?;
         } else {
@@ -143,9 +142,7 @@ impl TcpConnection {
                         let gateway_ip = IPv4Address::try_from(ip_bytes.as_slice())
                             .map_err(|_| TcpError::GetGatewayIp)?;
 
-                        let dest_mac_bytes =
-                            run_arp(sock_fd, src_mac.clone(), src_ip.clone(), gateway_ip.clone())
-                                .unwrap();
+                        let dest_mac_bytes = run_arp(sock_fd, src_mac, src_ip, gateway_ip).unwrap();
 
                         dest_mac = MacAddress::try_from(dest_mac_bytes.as_slice())
                             .map_err(|_| TcpError::ArpFailed)?;
@@ -161,8 +158,8 @@ impl TcpConnection {
         }
 
         let mut conn = Self {
-            src_mac: src_mac.clone(),
-            dest_mac: dest_mac.clone(),
+            src_mac: src_mac,
+            dest_mac: dest_mac,
             sock_fd: sock_fd,
             src_ip: src_ip,
             src_port: SRC_PORT,
@@ -174,10 +171,7 @@ impl TcpConnection {
             time_wait_deadline: None,
         };
 
-        let hdsk_res = tcp_handshake(
-            &mut conn, src_mac, dest_mac, src_ip, dest_ip, SRC_PORT, dest_port,
-        );
-
+        let hdsk_res = conn.handshake();
         match hdsk_res {
             Ok(_) => {
                 if conn.state == TcpState::Established {
@@ -192,49 +186,25 @@ impl TcpConnection {
     }
 
     pub fn close(mut self) -> Result<(), TcpError> {
-        let sent_fin_seg = tcp::Segment::new(
+        let fin_res = send_fin(
+            self.sock_fd,
+            self.src_mac,
+            self.dest_mac,
             self.src_ip,
-            self.src_port,
             self.dest_ip,
+            self.src_port,
             self.dest_port,
-            tcp::Flags::FIN | tcp::Flags::ACK,
-            vec![],
-        )
-        .map_err(|_| TcpError::CloseConnectionFailed)?
-        .seq(self.seq_num)
-        .ack(self.ack_num)
-        .checksum(self.src_ip, self.dest_ip, tcp::CODEPOINT)
-        .map_err(|_| TcpError::CloseConnectionFailed)?;
-
-        let ip_datagram =
-            ipv4::Datagram::<tcp::Segment>::new(self.src_ip, self.dest_ip, sent_fin_seg.clone())
-                .map_err(|_| TcpError::CloseConnectionFailed)?
-                .checksum()
-                .map_err(|_| TcpError::CloseConnectionFailed)?;
-
-        let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(
-            self.dest_mac.clone(),
-            self.src_mac.clone(),
-            ip_datagram,
+            self.seq_num,
+            self.ack_num,
         );
 
-        let frame_as_bytes: Vec<u8> =
-            Vec::try_from(&frame).map_err(|_| TcpError::CloseConnectionFailed)?;
-
-        let bytes_sent = unsafe {
-            send(
-                self.sock_fd,
-                frame_as_bytes.as_ptr() as *const _,
-                frame_as_bytes.len(),
-                0,
-            )
-        };
-
-        if bytes_sent < 0 {
-            return Err(TcpError::CloseConnectionFailed);
-        } else {
-            self.state = TcpState::FinWait1;
-            self.seq_num = sent_fin_seg.seq_num.wrapping_add(1);
+        match fin_res {
+            Ok(_) => {
+                self.state = TcpState::FinWait1;
+                // FIN consumes a byte in the byte stream, so our seq_num needs to be incremented
+                self.seq_num = self.seq_num.wrapping_add(1);
+            }
+            Err(_) => return Err(TcpError::CloseConnectionFailed),
         }
 
         let mut buffer = [0u8; 65536];
@@ -319,8 +289,7 @@ impl TcpConnection {
 
                                     let is_remote_fin =
                                         remote_tcp_seg.flags.contains(tcp::Flags::FIN);
-                                    let is_ack_of_sent_fin = remote_tcp_seg.ack_num
-                                        == sent_fin_seg.seq_num.wrapping_add(1);
+                                    let is_ack_of_sent_fin = remote_tcp_seg.ack_num == self.seq_num;
 
                                     // In the below logic, a re-transmitted FIN while in TimeWait
                                     // will not match any if branch but the ACK will still be sent
@@ -356,6 +325,9 @@ impl TcpConnection {
                                             else if is_ack_of_sent_fin
                                                 && self.state == TcpState::FinWait1
                                             {
+                                                println!(
+                                                    "FIN,ACK received, transition to TimeWait"
+                                                );
                                                 new_state = TcpState::TimeWait;
                                             }
                                             // Simultaenous Close - remote FIN received before my FIN is ACKed
@@ -411,6 +383,107 @@ impl TcpConnection {
             }
         }
 
+        return Ok(());
+    }
+
+    pub fn handshake(&mut self) -> Result<(), TcpError> {
+        let syn_res = send_syn(
+            self.sock_fd,
+            self.src_mac,
+            self.dest_mac,
+            self.src_ip,
+            self.dest_ip,
+            self.src_port,
+            self.dest_port,
+        );
+
+        match syn_res {
+            Ok(isn) => {
+                self.state = TcpState::SynSent;
+                self.seq_num = isn.wrapping_add(1)
+            }
+            Err(_) => return Err(TcpError::Handshake),
+        }
+        let mut buffer = [0u8; 65536];
+
+        while self.state != TcpState::Established && self.state != TcpState::Closed {
+            let frame_size = unsafe {
+                recv(
+                    self.sock_fd,
+                    buffer.as_mut_ptr() as *mut c_void,
+                    buffer.len(),
+                    0,
+                )
+            };
+
+            if frame_size < 0 {
+                return Err(TcpError::Handshake);
+            }
+
+            let eth_type = u16::from_be_bytes([buffer[12], buffer[13]]);
+            // Ethernet frame has 14 bytes of header. Next proto field is byte 10 (9 index) of an IPv4
+            // header
+            let next_proto_cp = buffer[14 + 9];
+
+            match eth_type {
+                ipv4::CODEPOINT => match next_proto_cp {
+                    tcp::CODEPOINT => {
+                        let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::try_from(
+                            &buffer[..frame_size as usize],
+                        )
+                        .map_err(|_| TcpError::Handshake)?;
+
+                        let remote_ip_dgram: &ipv4::Datagram<tcp::Segment> = &frame.payload;
+                        let remote_tcp_seg: &tcp::Segment = &remote_ip_dgram.payload;
+
+                        let is_syn_from_remote = remote_ip_dgram.src_ip == self.dest_ip
+                            && remote_ip_dgram.dest_ip == self.src_ip
+                            && remote_tcp_seg.dest_port == self.src_port
+                            && remote_tcp_seg.src_port == self.dest_port
+                            && remote_tcp_seg.flags.contains(tcp::Flags::SYN);
+
+                        let is_ack_to_syn = remote_tcp_seg.ack_num == self.seq_num;
+
+                        if is_syn_from_remote {
+                            println!("Is SYN from remote");
+                            println!("Remote ACK num: {}", remote_tcp_seg.ack_num);
+                            println!("Local SEQ num: {}", self.seq_num);
+                            if is_ack_to_syn == false {
+                                return Err(TcpError::UnclosedConnection);
+                            }
+                            println!("Is ACK to SYN");
+
+                            // A SYN can't carry any payload so, unlike sending an ACK to a FIN, here we
+                            // only add 1 to the remote's seq_num and don't assume any payload length
+                            let new_ack = remote_tcp_seg.seq_num.wrapping_add(1);
+
+                            self.ack_num = new_ack;
+
+                            let ack_res = send_ack(
+                                self.sock_fd,
+                                self.src_mac,
+                                self.dest_mac,
+                                self.src_ip,
+                                self.dest_ip,
+                                self.src_port,
+                                self.dest_port,
+                                self.seq_num,
+                                self.ack_num,
+                            );
+
+                            match ack_res {
+                                Ok(_) => {
+                                    self.state = TcpState::Established;
+                                }
+                                Err(_) => return Err(TcpError::Handshake),
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
         return Ok(());
     }
 }
@@ -483,11 +556,7 @@ fn send_ack(
         .checksum()
         .map_err(|_| TcpError::Placeholder)?;
 
-    let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(
-        dest_mac.clone(),
-        src_mac.clone(),
-        dat,
-    );
+    let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(dest_mac, src_mac, dat);
 
     let resp_frame_as_bytes: Vec<u8> = Vec::try_from(&frame).map_err(|_| TcpError::Placeholder)?;
 
@@ -506,30 +575,66 @@ fn send_ack(
     return Ok(());
 }
 
-// TODO
-fn send_fin() -> Result<(), TcpError> {
-    return Ok(());
-}
-// TODO
-fn send_syn() -> Result<(), TcpError> {
-    return Ok(());
-}
-
-// TODO:
-// Investigate overuse of .clone()
-// Implement other possible TCP state transitions (currently only SYN -> SYN-ACK -> ACK is handled)
-// Actually work on error handling
-// Confirmation of ACK reception?
-pub fn tcp_handshake(
-    connection: &mut TcpConnection,
+fn send_fin(
+    socket_fd: i32,
     src_mac: MacAddress,
     dest_mac: MacAddress,
     src_ip: IPv4Address,
     dest_ip: IPv4Address,
     src_port: u16,
     dest_port: u16,
+    seq_num: u32,
+    ack_num: u32,
 ) -> Result<(), TcpError> {
-    let syn_tcp_segment = tcp::Segment::new(
+    let seg = tcp::Segment::new(
+        src_ip,
+        src_port,
+        dest_ip,
+        dest_port,
+        tcp::Flags::FIN | tcp::Flags::ACK,
+        vec![],
+    )
+    .map_err(|_| TcpError::CloseConnectionFailed)?
+    .seq(seq_num)
+    .ack(ack_num)
+    .checksum(src_ip, dest_ip, tcp::CODEPOINT)
+    .map_err(|_| TcpError::CloseConnectionFailed)?;
+
+    let dgram = ipv4::Datagram::<tcp::Segment>::new(src_ip, dest_ip, seg.clone())
+        .map_err(|_| TcpError::CloseConnectionFailed)?
+        .checksum()
+        .map_err(|_| TcpError::CloseConnectionFailed)?;
+
+    let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(dest_mac, src_mac, dgram);
+
+    let frame_as_bytes: Vec<u8> =
+        Vec::try_from(&frame).map_err(|_| TcpError::CloseConnectionFailed)?;
+
+    let bytes_sent = unsafe {
+        send(
+            socket_fd,
+            frame_as_bytes.as_ptr() as *const _,
+            frame_as_bytes.len(),
+            0,
+        )
+    };
+
+    if bytes_sent < 0 {
+        return Err(TcpError::CloseConnectionFailed);
+    }
+    return Ok(());
+}
+
+fn send_syn(
+    socket_fd: i32,
+    src_mac: MacAddress,
+    dest_mac: MacAddress,
+    src_ip: IPv4Address,
+    dest_ip: IPv4Address,
+    src_port: u16,
+    dest_port: u16,
+) -> Result<u32, TcpError> {
+    let seg = tcp::Segment::new(
         src_ip,
         src_port,
         dest_ip,
@@ -541,22 +646,19 @@ pub fn tcp_handshake(
     .checksum(src_ip, dest_ip, tcp::CODEPOINT)
     .map_err(|_| TcpError::Handshake)?;
 
-    let ip_datagram = ipv4::Datagram::<tcp::Segment>::new(src_ip, dest_ip, syn_tcp_segment.clone())
+    let ip_datagram = ipv4::Datagram::<tcp::Segment>::new(src_ip, dest_ip, seg.clone())
         .map_err(|_| TcpError::Handshake)?
         .checksum()
         .map_err(|_| TcpError::Handshake)?;
 
-    let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(
-        dest_mac.clone(),
-        src_mac.clone(),
-        ip_datagram,
-    );
+    let frame =
+        ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(dest_mac, src_mac, ip_datagram);
 
     let frame_as_bytes: Vec<u8> = Vec::try_from(&frame).map_err(|_| TcpError::Handshake)?;
 
     let bytes_sent = unsafe {
         send(
-            connection.sock_fd,
+            socket_fd,
             frame_as_bytes.as_ptr() as *const _,
             frame_as_bytes.len(),
             0,
@@ -565,113 +667,14 @@ pub fn tcp_handshake(
 
     if bytes_sent < 0 {
         return Err(TcpError::Handshake);
-    } else {
-        connection.state = TcpState::SynSent
     }
-
-    let mut buffer = [0u8; 65536];
-
-    while connection.state != TcpState::Established && connection.state != TcpState::Closed {
-        let frame_size = unsafe {
-            recv(
-                connection.sock_fd,
-                buffer.as_mut_ptr() as *mut c_void,
-                buffer.len(),
-                0,
-            )
-        };
-
-        if frame_size < 0 {
-            return Err(TcpError::Handshake);
-        }
-
-        let eth_type = u16::from_be_bytes([buffer[12], buffer[13]]);
-        // Ethernet frame has 14 bytes of header. Next proto field is byte 10 (9 index) of an IPv4
-        // header
-        let next_proto_cp = buffer[14 + 9];
-
-        match eth_type {
-            ipv4::CODEPOINT => match next_proto_cp {
-                tcp::CODEPOINT => {
-                    let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::try_from(
-                        &buffer[..frame_size as usize],
-                    )
-                    .map_err(|_| TcpError::Handshake)?;
-
-                    let remote_ip_dgram: &ipv4::Datagram<tcp::Segment> = &frame.payload;
-                    let remote_tcp_seg: &tcp::Segment = &remote_ip_dgram.payload;
-
-                    let is_synack_from_remote = remote_ip_dgram.src_ip == dest_ip
-                        && remote_ip_dgram.dest_ip == src_ip
-                        && remote_tcp_seg.dest_port == src_port
-                        && remote_tcp_seg.src_port == dest_port
-                        && remote_tcp_seg.flags.contains(tcp::Flags::ACK)
-                        && remote_tcp_seg.flags.contains(tcp::Flags::SYN);
-
-                    let is_expected_ack = remote_tcp_seg.ack_num == syn_tcp_segment.seq_num + 1;
-
-                    if is_synack_from_remote {
-                        if is_expected_ack == false {
-                            return Err(TcpError::UnclosedConnection);
-                        }
-
-                        let resp_tcp_segment = tcp::Segment::new(
-                            src_ip,
-                            src_port,
-                            dest_ip,
-                            dest_port,
-                            tcp::Flags::ACK,
-                            vec![],
-                        )
-                        .map_err(|_| TcpError::Handshake)?
-                        .seq(remote_tcp_seg.ack_num)
-                        .ack(remote_tcp_seg.seq_num + 1)
-                        .checksum(src_ip, dest_ip, tcp::CODEPOINT)
-                        .map_err(|_| TcpError::Handshake)?;
-
-                        let resp_ipv4_datagram = ipv4::Datagram::<tcp::Segment>::new(
-                            src_ip,
-                            dest_ip,
-                            resp_tcp_segment.clone(),
-                        )
-                        .map_err(|_| TcpError::Handshake)?
-                        .checksum()
-                        .map_err(|_| TcpError::Handshake)?;
-
-                        let resp_frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(
-                            dest_mac.clone(),
-                            src_mac.clone(),
-                            resp_ipv4_datagram,
-                        );
-
-                        let resp_frame_as_bytes: Vec<u8> =
-                            Vec::try_from(&resp_frame).map_err(|_| TcpError::Handshake)?;
-
-                        let bytes_sent = unsafe {
-                            send(
-                                connection.sock_fd,
-                                resp_frame_as_bytes.as_ptr() as *const _,
-                                resp_frame_as_bytes.len(),
-                                0,
-                            )
-                        };
-
-                        if bytes_sent < 0 {
-                            return Err(TcpError::Handshake);
-                        }
-
-                        connection.state = TcpState::Established;
-                        connection.seq_num = remote_tcp_seg.ack_num;
-                        connection.ack_num = remote_tcp_seg.seq_num + 1;
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-    }
-    return Ok(());
+    // Returns the ISN generated for the SYN so it can be attached to the TCP Connection object by
+    // the caller
+    Ok(seg.seq_num)
 }
+
+// TODO:
+// Actually work on error handling
 
 pub fn tcp_incoming_handler(segment: tcp::Segment) {
 
@@ -707,8 +710,8 @@ pub fn tcp_incoming_handler(segment: tcp::Segment) {
 //
 // let http_frame =
 //     ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(
-//         dest_mac.clone(),
-//         src_mac.clone(),
+//         dest_mac,
+//         src_mac,
 //         http_ipv4,
 //     );
 //
@@ -738,10 +741,10 @@ pub fn run_arp(
 ) -> Option<[u8; 6]> {
     // TODO: Error handling
     let arp_datagram = arp::Datagram::new(
-        HardwareAddress::MAC(src_mac.clone()),
+        HardwareAddress::MAC(src_mac),
         HardwareAddress::MAC(MacAddress::all_zero()),
-        ProtocolAddress::IPv4(src_ip.clone()),
-        ProtocolAddress::IPv4(dest_ip.clone()),
+        ProtocolAddress::IPv4(src_ip),
+        ProtocolAddress::IPv4(dest_ip),
         arp::Operation::REQUEST,
     );
 
