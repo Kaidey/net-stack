@@ -20,13 +20,13 @@ pub enum Operation {
 impl Operation {
     pub fn bits(self) -> u16 {
         match self {
-            Operation::Request => 0x00,
-            Operation::Reply => 0x01,
+            Operation::Request => 0x01,
+            Operation::Reply => 0x02,
         }
     }
 }
 
-impl TryFrom<&[u8]> for Operation {
+impl TryFrom<u8> for Operation {
     type Error = DatagramError;
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
