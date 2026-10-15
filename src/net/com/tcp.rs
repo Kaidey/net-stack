@@ -245,8 +245,8 @@ impl Segment {
 
     pub fn checksum_ipv4(
         mut self,
-        src_ip: &[u8],
-        dest_ip: &[u8],
+        src_ip: IPv4Address,
+        dest_ip: IPv4Address,
         proto: u8,
     ) -> Result<Self, SegmentError> {
         let mut bytes_for_checksum: Vec<u8> = Vec::new();
@@ -255,8 +255,8 @@ impl Segment {
             Vec::try_from(&self).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
 
         // Pseudo-header
-        bytes_for_checksum.extend_from_slice(src_ip);
-        bytes_for_checksum.extend_from_slice(dest_ip);
+        bytes_for_checksum.extend_from_slice(src_ip.addr_bytes());
+        bytes_for_checksum.extend_from_slice(dest_ip.addr_bytes());
         bytes_for_checksum.push(0x00);
         bytes_for_checksum.push(proto);
         bytes_for_checksum.extend_from_slice(&(segment_as_bytes.len() as u16).to_be_bytes());

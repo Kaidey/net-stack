@@ -585,7 +585,7 @@ fn send_ack(
             .map_err(|_| TcpError::Placeholder)?
             .seq(seq_num)
             .ack(ack_num)
-            .checksum_ipv4(&src_ip.addr_bytes(), &dest_ip.addr_bytes(), tcp::CODEPOINT)
+            .checksum_ipv4(src_ipv4, dest_ipv4, tcp::CODEPOINT)
             .map_err(|_| TcpError::Placeholder)?;
 
             let dat = ipv4::Datagram::<tcp::Segment>::new(src_ipv4, dest_ipv4, seg.clone())
@@ -630,7 +630,7 @@ fn send_fin(
     ack_num: u32,
 ) -> Result<(), TcpError> {
     match (src_ip, dest_ip) {
-        (IpAddr::V4(src), IpAddr::V4(dest)) => {
+        (IpAddr::V4(src_ipv4), IpAddr::V4(dest_ipv4)) => {
             let seg = tcp::Segment::new(
                 src_ip,
                 src_port,
@@ -642,10 +642,10 @@ fn send_fin(
             .map_err(|_| TcpError::CloseConnectionFailed)?
             .seq(seq_num)
             .ack(ack_num)
-            .checksum_ipv4(&src_ip.addr_bytes(), &dest_ip.addr_bytes(), tcp::CODEPOINT)
+            .checksum_ipv4(src_ipv4, dest_ipv4, tcp::CODEPOINT)
             .map_err(|_| TcpError::CloseConnectionFailed)?;
 
-            let dgram = ipv4::Datagram::<tcp::Segment>::new(src, dest, seg.clone())
+            let dgram = ipv4::Datagram::<tcp::Segment>::new(src_ipv4, dest_ipv4, seg.clone())
                 .map_err(|_| TcpError::CloseConnectionFailed)?
                 .checksum()
                 .map_err(|_| TcpError::CloseConnectionFailed)?;
@@ -685,7 +685,7 @@ fn send_syn(
     dest_port: u16,
 ) -> Result<u32, TcpError> {
     match (src_ip, dest_ip) {
-        (IpAddr::V4(src), IpAddr::V4(dest)) => {
+        (IpAddr::V4(src_ipv4), IpAddr::V4(dest_ipv4)) => {
             let seg = tcp::Segment::new(
                 src_ip,
                 src_port,
@@ -695,10 +695,10 @@ fn send_syn(
                 vec![],
             )
             .map_err(|_| TcpError::Handshake)?
-            .checksum_ipv4(&src_ip.addr_bytes(), &dest_ip.addr_bytes(), tcp::CODEPOINT)
+            .checksum_ipv4(src_ipv4, dest_ipv4, tcp::CODEPOINT)
             .map_err(|_| TcpError::Handshake)?;
 
-            let ip_datagram = ipv4::Datagram::<tcp::Segment>::new(src, dest, seg.clone())
+            let ip_datagram = ipv4::Datagram::<tcp::Segment>::new(src_ipv4, dest_ipv4, seg.clone())
                 .map_err(|_| TcpError::Handshake)?
                 .checksum()
                 .map_err(|_| TcpError::Handshake)?;
