@@ -2,7 +2,6 @@ mod crypto;
 mod net;
 mod os;
 
-use std;
 // TODO:
 // Impl something similar to to_sock_addr (traits) in order to isolate address convertion logic
 // Impl ephemeral ports if no source port is supplied for TcpConnection
@@ -27,26 +26,6 @@ fn main() {
     // new_conn.read();
 
     new_conn.close().unwrap();
-
-    let status = std::process::Command::new("iptables")
-        .args([
-            "-D",
-            "OUTPUT",
-            "-p",
-            "tcp",
-            "--tcp-flags",
-            "RST",
-            "RST",
-            "--sport",
-            "65000",
-            "-j",
-            "DROP",
-        ])
-        .status()
-        .expect("failed to run iptables");
-    if !status.success() {
-        panic!("iptables add rule failed");
-    }
 
     // os::drop_root_privilege();
 }
