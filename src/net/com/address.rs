@@ -1,12 +1,16 @@
-use std::{fmt, num::ParseIntError};
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddressError {
     NotEnoughOctets,
     ConvertionFailed,
+    InvalidAddress,
+    MissingPort,
+    InvalidPort,
+    NotImplemented,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolAddress {
     IPv4(IPv4Address),
     IPv6(IPv6Address),
@@ -15,44 +19,40 @@ pub enum ProtocolAddress {
 impl ProtocolAddress {
     pub fn from_wire(cp: u16, addr_bytes: &[u8]) -> Option<Self> {
         match cp {
-            0x0800 => Some(ProtocolAddress::IPv4(IPv4Address(
-                // TODO: Error handling
+            IPv4Address::CODEPOINT => Some(ProtocolAddress::IPv4(IPv4Address(
                 addr_bytes.try_into().ok()?,
             ))),
+
             // cp if cp == IPv6Address::addr_codepoint() => Some(IPv6Address(addr_bytes)),
             _ => None,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ProtocolAddress::IPv4(_) => "IPv4",
+            ProtocolAddress::IPv6(_) => "IPv6",
+        }
+    }
+
+    pub fn codepoint(&self) -> u16 {
+        match self {
+            Self::IPv4(_addr) => IPv4Address::CODEPOINT,
+            Self::IPv6(_addr) => IPv6Address::CODEPOINT,
+        }
+    }
+
+    pub fn length(&self) -> usize {
+        match self {
+            Self::IPv4(_addr) => IPv4Address::LENGTH,
+            Self::IPv6(_addr) => IPv6Address::LENGTH,
         }
     }
 
     pub fn addr_bytes(&self) -> &[u8] {
         match self {
             ProtocolAddress::IPv4(addr) => addr.addr_bytes(),
-            // TODO
-            ProtocolAddress::IPv6(_addr) => [0, 0, 0].as_slice(),
-        }
-    }
-
-    pub fn codepoint(&self) -> u16 {
-        match self {
-            ProtocolAddress::IPv4(_addr) => 0x0800,
-            // TODO
-            ProtocolAddress::IPv6(_addr) => 0x0000,
-        }
-    }
-
-    pub fn length(&self) -> u8 {
-        match self {
-            ProtocolAddress::IPv4(_addr) => 0x04,
-            // TODO
-            ProtocolAddress::IPv6(_addr) => 0x00,
-        }
-    }
-
-    pub fn addr_as_string(&self) -> String {
-        match self {
-            ProtocolAddress::IPv4(addr) => addr.to_string(),
-            // TODO
-            ProtocolAddress::IPv6(addr) => String::new(),
+            ProtocolAddress::IPv6(addr) => addr.addr_bytes(),
         }
     }
 }
@@ -60,8 +60,9 @@ impl ProtocolAddress {
 impl fmt::Display for ProtocolAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ProtocolAddress::IPv4(_addr) => write!(f, "IPv4"),
-            ProtocolAddress::IPv6(_addr) => write!(f, "IPv6"),
+            ProtocolAddress::IPv4(addr) => write!(f, "{}", addr),
+            // TODO
+            ProtocolAddress::IPv6(addr) => write!(f, "{}", addr),
         }
     }
 }
@@ -74,10 +75,28 @@ pub enum HardwareAddress {
 impl HardwareAddress {
     pub fn from_wire(cp: u16, addr_bytes: &[u8]) -> Option<Self> {
         match cp {
-            0x0001 => Some(HardwareAddress::MAC(MacAddress(
+            MacAddress::CODEPOINT => Some(HardwareAddress::MAC(MacAddress(
                 addr_bytes.try_into().ok()?,
             ))),
             _ => None,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            HardwareAddress::MAC(_) => "MAC",
+        }
+    }
+
+    pub fn codepoint(&self) -> u16 {
+        match self {
+            Self::MAC(_addr) => MacAddress::CODEPOINT,
+        }
+    }
+
+    pub fn length(&self) -> usize {
+        match self {
+            Self::MAC(_) => MacAddress::LENGTH,
         }
     }
 
@@ -86,30 +105,12 @@ impl HardwareAddress {
             HardwareAddress::MAC(addr) => addr.addr_bytes(),
         }
     }
-
-    pub fn codepoint(&self) -> u16 {
-        match self {
-            HardwareAddress::MAC(_addr) => 0x0001,
-        }
-    }
-
-    pub fn length(&self) -> u8 {
-        match self {
-            HardwareAddress::MAC(_addr) => 0x06,
-        }
-    }
-
-    pub fn addr_as_string(&self) -> String {
-        match self {
-            HardwareAddress::MAC(addr) => addr.to_string(),
-        }
-    }
 }
 
 impl fmt::Display for HardwareAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            HardwareAddress::MAC(_addr) => write!(f, "MAC"),
+            HardwareAddress::MAC(addr) => write!(f, "{}", addr),
         }
     }
 }
@@ -118,6 +119,8 @@ impl fmt::Display for HardwareAddress {
 pub struct IPv4Address(pub [u8; 4]);
 
 impl IPv4Address {
+    pub const CODEPOINT: u16 = 0x0800;
+    pub const LENGTH: usize = 4;
     pub fn addr_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -177,16 +180,13 @@ impl fmt::Display for IPv4Address {
 pub struct MacAddress(pub [u8; 6]);
 
 impl MacAddress {
+    pub const CODEPOINT: u16 = 0x0001;
+    pub const LENGTH: usize = 6;
+    pub const BROADCAST: Self = Self([0xFF; 6]);
+    pub const ZERO: Self = Self([0; 6]);
+
     pub fn addr_bytes(&self) -> &[u8] {
         &self.0
-    }
-
-    pub fn broadcast() -> Self {
-        Self([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
-    }
-
-    pub fn all_zero() -> Self {
-        Self([0, 0, 0, 0, 0, 0])
     }
 
     pub fn is_all_zero(&self) -> bool {
@@ -214,7 +214,7 @@ impl TryFrom<&str> for MacAddress {
     fn try_from(str: &str) -> Result<Self, AddressError> {
         let mut res: Result<Vec<u8>, AddressError> = Err(AddressError::ConvertionFailed);
 
-        if str.len() == 0 {
+        if str.len() == 0 || str.len() < MacAddress::LENGTH {
             return Err(AddressError::NotEnoughOctets);
         }
 
@@ -277,5 +277,84 @@ impl fmt::Display for MacAddress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IPv6Address(String);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IPv6Address([u8; 16]);
+
+impl IPv6Address {
+    // TODO
+    pub const CODEPOINT: u16 = 0x0000;
+    pub const LENGTH: usize = 0;
+
+    pub fn addr_bytes(&self) -> &[u8] {
+        // TODO
+        &[0 as u8]
+    }
+}
+
+impl fmt::Display for IPv6Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Not Implemented")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpAddr {
+    V4(IPv4Address),
+    V6(IPv6Address),
+}
+
+impl IpAddr {
+    pub fn addr_bytes(self) -> Vec<u8> {
+        match self {
+            IpAddr::V4(addr) => return addr.addr_bytes().to_vec(),
+            IpAddr::V6(_addr) => return vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SockAddr(pub IpAddr, pub u16);
+
+impl SockAddr {
+    pub fn ip_addr(self) -> IpAddr {
+        self.0
+    }
+
+    pub fn port(self) -> u16 {
+        self.1
+    }
+}
+
+pub trait ToSockAddr {
+    fn to_sock_addr(&self) -> Result<SockAddr, AddressError>;
+}
+
+impl ToSockAddr for &str {
+    fn to_sock_addr(&self) -> Result<SockAddr, AddressError> {
+        // Handles direct ip:port strings
+        // TODO: Handle host names with DNS
+        let slices = self.split(":").collect::<Vec<&str>>();
+
+        if slices.len() != 2 || slices[1].is_empty() {
+            return Err(AddressError::MissingPort);
+        }
+
+        let dest_ip = IPv4Address::try_from(slices[0]).map_err(|_| AddressError::InvalidAddress)?;
+
+        // Radix is the same as the base of the number system we want to use (base 10 here)
+        let radix: u32 = 10;
+
+        let dest_port_digits: Vec<u32> = slices[1]
+            .chars()
+            .map(|c| c.to_digit(radix))
+            .collect::<Option<Vec<u32>>>()
+            .ok_or(AddressError::InvalidPort)?;
+
+        let mut dest_port = 0;
+        for d in dest_port_digits {
+            dest_port = (dest_port as u16) * 10 + (d as u16);
+        }
+
+        Ok(SockAddr(IpAddr::V4(dest_ip), dest_port))
+    }
+}

@@ -16,6 +16,7 @@ impl CryptoSecret {
     pub fn new() -> Self {
         let mut secret = [0; 32];
 
+        // Ultimately gets the random bytes from OS sources like dev/urandom on linux
         getrandom::fill(&mut secret).expect("[Secret Creation] Failed to get random bytes");
 
         CryptoSecret(secret)

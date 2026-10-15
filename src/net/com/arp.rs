@@ -100,8 +100,8 @@ impl TryFrom<&Datagram> for Vec<u8> {
 
         bytes.extend_from_slice(&datagram.src_hardware_addr.codepoint().to_be_bytes());
         bytes.extend_from_slice(&datagram.src_proto_addr.codepoint().to_be_bytes());
-        bytes.push(datagram.src_hardware_addr.length());
-        bytes.push(datagram.src_proto_addr.length());
+        bytes.push(datagram.src_hardware_addr.length() as u8);
+        bytes.push(datagram.src_proto_addr.length() as u8);
         bytes.extend_from_slice(&datagram.op.bits().to_be_bytes());
         bytes.extend_from_slice(&datagram.src_hardware_addr.addr_bytes());
         bytes.extend_from_slice(&datagram.src_proto_addr.addr_bytes());
@@ -172,22 +172,22 @@ impl fmt::Display for Datagram {
         write!(
             f,
             "\nSource Hardware Address: {}",
-            self.src_hardware_addr.addr_as_string()
+            self.src_hardware_addr.to_string()
         )?;
         write!(
             f,
             "\nSource Protocol Address: {}",
-            self.src_proto_addr.addr_as_string()
+            self.src_proto_addr.to_string()
         )?;
         write!(
             f,
             "\nDestination Hardware Address: {}",
-            self.dest_hardware_addr.addr_as_string()
+            self.dest_hardware_addr.to_string()
         )?;
         write!(
             f,
             "\nDestination Protocol Address: {}",
-            self.dest_proto_addr.addr_as_string()
+            self.dest_proto_addr.to_string()
         )?;
 
         Result::Ok(())

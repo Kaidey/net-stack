@@ -3,32 +3,40 @@ mod net;
 mod os;
 
 use std;
-
-// TODO: 
+// TODO:
+// Impl something similar to to_sock_addr (traits) in order to isolate address convertion logic
+// Impl ephemeral ports if no source port is supplied for TcpConnection
 // Replace pub struct properties with getter methods or analogous
 // FIN retransmist for TCP Close and retransmits in genera
 // DSN Resolution
 // IPv4 Fragmentation
 // IPv4 and TCP Options
 // TCP LIstener
+// Handle dropping iptables rule on SIGINT. Currently only handled when TCP Connection is closed
 
 fn main() {
-    // Drop the kernel's RST-Block for unknown SYN/ACK
-    // Raw Sockets operate along the Kernel's own IP/TCP stack, which means it parses,
-    // independently, the same SYN/ACK I receive. Since it has no idea that the port I use for TCP
-    // connections is actually being used, it assumes the SYN/ACK is not supposed to be received by
-    // the port and sends an RST
+    
+
+    let new_conn = net::TcpConnection::new("45.33.32.156:80").unwrap();
+
+    let http_payload = "GET / HTTP/1.1\r\nHost: scanme.nmap.org\r\nConnection: close\r\n\r\n"
+        .to_string()
+        .into_bytes();
+
+    // new_conn.write(http_payload);
+    // new_conn.read();
+
+    new_conn.close().unwrap();
+
     let status = std::process::Command::new("iptables")
         .args([
-            "-A",
+            "-D",
             "OUTPUT",
             "-p",
             "tcp",
             "--tcp-flags",
             "RST",
             "RST",
-            "-s",
-            "192.168.68.101",
             "--sport",
             "65000",
             "-j",
@@ -40,12 +48,5 @@ fn main() {
         panic!("iptables add rule failed");
     }
 
-    let dest_addr = "45.33.32.156:80";
-    let new_conn = net::TcpConnection::new(dest_addr).unwrap();
-
-    std::thread::sleep(std::time::Duration::from_secs(10));
-
-    new_conn.close().unwrap();
-    
     // os::drop_root_privilege();
 }

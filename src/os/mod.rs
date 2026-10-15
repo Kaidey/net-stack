@@ -202,3 +202,47 @@ pub fn get_itf_ipv4_addr(target_itf_name: &str) -> Result<Option<[u8; 4]>, io::E
     }
     Ok(None)
 }
+
+pub enum IpTableRuleAction {
+    Insert,
+    Delete,
+}
+
+// Add an IPTables rule to drop the kernel's RST-Block for unknown SYN/ACK
+// Raw Sockets operate along the Kernel's own IP/TCP stack, which means it parses,
+// independently, the same SYN/ACK I receive. Since it has no idea that the port I use for TCP
+// connections is actually being used, it assumes the SYN/ACK is not supposed to be received by
+// the port and sends an RST
+pub fn switch_iptables_kernel_rst_block(
+    src_port: u16,
+    action: IpTableRuleAction,
+) -> Result<bool, std::io::Error> {
+    let flag = match action {
+        IpTableRuleAction::Insert => "-I",
+        IpTableRuleAction::Delete => "-D",
+    };
+    let port = src_port.to_string();
+    let mut args = vec![flag, "OUTPUT"];
+
+    // 1 is only used in Insert since it tells the command to insert the rule in the first position
+    // of the list so it has the highest priority
+    if matches!(action, IpTableRuleAction::Insert) {
+        args.push("1");
+    }
+    args.extend([
+        "-p",
+        "tcp",
+        "--tcp-flags",
+        "RST",
+        "RST",
+        "--sport",
+        &port,
+        "-j",
+        "DROP",
+    ]);
+
+    Ok(std::process::Command::new("iptables")
+        .args(&args)
+        .status()?
+        .success())
+}

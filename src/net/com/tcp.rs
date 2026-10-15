@@ -5,7 +5,10 @@ use std::{
     time::Instant,
 };
 
-use crate::net::com::{address::IPv4Address, utils};
+use crate::net::com::{
+    address::{IPv4Address, IpAddr},
+    utils,
+};
 use crate::{crypto, net::com::PduPayload};
 
 pub struct Clock(Instant);
@@ -151,9 +154,9 @@ pub struct Segment {
 
 impl Segment {
     pub fn new(
-        src_ip: IPv4Address,
+        src_ip: IpAddr,
         src_port: u16,
-        dest_ip: IPv4Address,
+        dest_ip: IpAddr,
         dest_port: u16,
         flags: Flags,
         payload: Vec<u8>,
@@ -173,6 +176,8 @@ impl Segment {
             opts: vec![],
             payload: payload,
         }
+        // TODO: Check if ISN generation is the same for IPv4 and IPv6 addresses, otherwise this
+        // doesn't work
         .gen_isn(
             &src_ip.addr_bytes(),
             &src_port.to_be_bytes(),
@@ -238,10 +243,10 @@ impl Segment {
         self
     }
 
-    pub fn checksum(
+    pub fn checksum_ipv4(
         mut self,
-        src_ip: IPv4Address,
-        dest_ip: IPv4Address,
+        src_ip: &[u8],
+        dest_ip: &[u8],
         proto: u8,
     ) -> Result<Self, SegmentError> {
         let mut bytes_for_checksum: Vec<u8> = Vec::new();
@@ -250,8 +255,8 @@ impl Segment {
             Vec::try_from(&self).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
 
         // Pseudo-header
-        bytes_for_checksum.extend_from_slice(src_ip.addr_bytes());
-        bytes_for_checksum.extend_from_slice(dest_ip.addr_bytes());
+        bytes_for_checksum.extend_from_slice(src_ip);
+        bytes_for_checksum.extend_from_slice(dest_ip);
         bytes_for_checksum.push(0x00);
         bytes_for_checksum.push(proto);
         bytes_for_checksum.extend_from_slice(&(segment_as_bytes.len() as u16).to_be_bytes());

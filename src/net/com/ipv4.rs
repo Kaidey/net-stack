@@ -154,21 +154,12 @@ pub enum DatagramError {
     ProtocolMismatch,
 }
 
-impl From<AddressError> for DatagramError {
-    fn from(err: AddressError) -> Self {
-        match err {
-            AddressError::NotEnoughOctets => DatagramError::AddressParsingFailed,
-            AddressError::ConvertionFailed => DatagramError::AddressParsingFailed,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IPv4Payload {
-    Tcp(Datagram<tcp::Segment>),
-    // Udp(Datagram<udp::Segment>),
-    Unknown(Datagram<UnknownPayload>),
-}
+// #[derive(Debug, Clone, PartialEq, Eq)]
+// pub enum IPv4Payload {
+//     Tcp(Datagram<tcp::Segment>),
+//     // Udp(Datagram<udp::Segment>),
+//     Unknown(Datagram<UnknownPayload>),
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownPayload(u8, Vec<u8>);
@@ -204,10 +195,7 @@ impl fmt::Display for UnknownPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Datagram<P>
-where
-    P: PduPayload,
-{
+pub struct Datagram<P: PduPayload<CodepointType = u8>> {
     version: u8,
     // In the struct, header length will be used as the total byte count instead of the 32-bit word
     // count for simplicity. Convertion will happen when transforming a struct instance into a byte
@@ -315,6 +303,9 @@ impl<P: PduPayload<CodepointType = u8>> Datagram<P> {
     }
 }
 
+// This syntax might feel weird, but it's basically saying that an IPv4 Datagram is a type of
+// PduPayload which itself carries a PduPayload P,thus implementing PduPayload for Datagram
+// over a generic P which needs to also implement PduPayload with codepoint being a u8
 impl<P: PduPayload<CodepointType = u8>> PduPayload for Datagram<P> {
     type Payload = Datagram<P>;
     type ErrorSpace = DatagramError;
@@ -382,8 +373,10 @@ impl<P: PduPayload<CodepointType = u8>> TryFrom<&[u8]> for Datagram<P> {
         let hlen_in_bytes: usize = hlen_in_32bit_words * 4;
         let total_len: usize = u16::from_be_bytes([buffer[2], buffer[3]]) as usize;
 
-        let src_ip = IPv4Address::try_from(&buffer[12..16])?;
-        let dest_ip = IPv4Address::try_from(&buffer[16..20])?;
+        let src_ip = IPv4Address::try_from(&buffer[12..16])
+            .map_err(|_| DatagramError::AddressParsingFailed)?;
+        let dest_ip = IPv4Address::try_from(&buffer[16..20])
+            .map_err(|_| DatagramError::AddressParsingFailed)?;
 
         Ok(Self {
             version: buffer[0] >> 4,
@@ -424,8 +417,9 @@ impl<P: PduPayload<CodepointType = u8>> fmt::Display for Datagram<P> {
         write!(f, "\nTime To Live: {}", self.ttl)?;
         write!(
             f,
-            "\nNext Level Protocol: {:02X}",
-            P::codepoint(&self.payload)
+            "\nNext Level Protocol: {:02X} ({})",
+            P::codepoint(&self.payload),
+            P::name()
         )?;
         write!(f, "\nChecksum: {:04X}", self.checksum)?;
         write!(f, "\nSource Address: {}", self.src_ip)?;
@@ -438,4 +432,3 @@ impl<P: PduPayload<CodepointType = u8>> fmt::Display for Datagram<P> {
         Ok(())
     }
 }
-// TODO: Fragmentation

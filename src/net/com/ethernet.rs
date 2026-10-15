@@ -1,4 +1,4 @@
-use crate::net::com::{PduPayload, address::MacAddress, arp, ipv4};
+use crate::net::com::{PduPayload, address::MacAddress};
 use core::fmt;
 
 // #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,9 +48,7 @@ impl fmt::Display for UnknownPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Frame<P>
-where
-    P: PduPayload,
+pub struct Frame<P: PduPayload<CodepointType = u16>>
 {
     dest_mac_address: MacAddress,
     src_mac_address: MacAddress,
