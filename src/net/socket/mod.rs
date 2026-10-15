@@ -55,13 +55,14 @@ fn interface_bind_packet_socket(sock_fd: i32, net_itf: CString) {
     }
 }
 
-// Reserves a free ephemeral TCP port by binding to port 0 (but never listening).
-// Returns the socket file descriptor and the port, because we need to manually close the socket
-// after the TCP Connection ends and also because we need to keep the fd in scope in order for the
-// socket to stay live. If the socket is closed, there is no guarantee that the port is still
-// reserved for the process. If the process is forcibly killed no action is needed since the
-// kernel closes any sockets owned by it.
-pub fn reserve_tcp_port() -> (i32, u16) {
+// Reserves a TCP port by creating a non-listening socket and binding it to the requested port
+// If requested == 0, the kernel picks an available port
+//
+// The socket needs to be closed manually if the process keeps running but it is no longer used. If
+// the process ends, the kernel closes the socket automatically. Its file descriptor also needs to
+// stay in scope for the socket to remain open and port reserved. For these reasons, the fd is also
+// returned
+pub fn reserve_tcp_port(requested_port: u16) -> Result<(i32, u16), std::io::Error> {
     let fd = unsafe { socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0) };
     if fd < 0 {
         panic!(
@@ -73,28 +74,31 @@ pub fn reserve_tcp_port() -> (i32, u16) {
     // With a zeroed sockaddr_in, the kernel picks the port
     let mut addr: sockaddr_in = unsafe { zeroed() };
     addr.sin_family = AF_INET as sa_family_t;
+    addr.sin_port = requested_port.to_be();
 
     let size = size_of::<sockaddr_in>() as socklen_t;
 
-    let bind_result = unsafe { bind(fd, &addr as *const _ as *const sockaddr, size) };
-    if bind_result < 0 {
-        panic!(
-            "Failed to bind reservation socket: {}",
-            std::io::Error::last_os_error()
-        );
+    let bind_res = unsafe { bind(fd, &addr as *const _ as *const sockaddr, size) };
+
+    // If the requested port is not free, bind will throw an error and bind_res == -1
+    if bind_res < 0 {
+        // Close the socket if bind fails, since binding is its only purpose
+        unsafe {
+            close(fd);
+        }
+        return Err(std::io::Error::last_os_error());
     }
 
-    // Ask the kernel which port we got
     let mut len = size;
-    let name_result = unsafe { getsockname(fd, &mut addr as *mut _ as *mut sockaddr, &mut len) };
-    if name_result < 0 {
-        panic!(
-            "Failed to read reserved port: {}",
-            std::io::Error::last_os_error()
-        );
+    let sockname_res = unsafe { getsockname(fd, &mut addr as *mut _ as *mut sockaddr, &mut len) };
+    if sockname_res < 0 {
+        unsafe {
+            close(fd);
+        }
+        return Err(std::io::Error::last_os_error());
     }
 
-    (fd, u16::from_be(addr.sin_port))
+    Ok((fd, u16::from_be(addr.sin_port)))
 }
 
 // Sets the socket timeout to the point in time where the TCP Connection transitions from TimeWait to

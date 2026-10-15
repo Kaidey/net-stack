@@ -24,17 +24,18 @@ use crate::os;
 
 const TIME_WAIT: Duration = Duration::from_secs(60);
 
-// Used hold the fd of the socket created to reserve an ephemeral port and the port number
-// This is important because the socket needs to remain in scope for the port it was assigned to
-// stay reserved for our process. TcpConnection instances will hold a PortGuard to guarantee this
+// Holds the fd of a reservation socket and the reserved port number
+// The socket needs to remain in scope for the port it was assigned to stay reserved for our process.
+// Reservation sockets allow us to either request a free port from the kernel or guarantee that a
+// client provided port is free
 struct PortGuard {
     sock_fd: i32,
     port: u16,
 }
 
 impl PortGuard {
-    fn new() -> Result<Self, TcpError> {
-        let (fd, port) = reserve_tcp_port();
+    fn new(request_port: u16) -> Result<Self, TcpError> {
+        let (fd, port) = reserve_tcp_port(request_port).map_err(|_| TcpError::Placeholder)?;
         match os::switch_iptables_kernel_rst_block(port, os::IpTableRuleAction::Insert) {
             Ok(true) => Ok(Self {
                 sock_fd: fd,
@@ -50,8 +51,8 @@ impl PortGuard {
     }
 }
 
-// Implements behaviour when a value is dropped (goes out of scope)
-// If we close our TCP Connection, this will run for the PortGuard instance held in it
+// Implements behaviour for when a value is dropped (goes out of scope)
+// E.g: if an object holding a PortGuard type is dropped
 impl Drop for PortGuard {
     fn drop(&mut self) {
         match os::switch_iptables_kernel_rst_block(self.port, os::IpTableRuleAction::Delete) {
@@ -82,7 +83,7 @@ pub struct TcpConnection {
     ack_num: u32,
     state: TcpState,
     time_wait_deadline: Option<std::time::Instant>,
-    // Fd for the socket created to reserve an ephemeral port
+    //
     src_port_guard: PortGuard,
 }
 
@@ -121,7 +122,7 @@ pub enum TcpError {
 }
 
 impl TcpConnection {
-    pub fn new<T: ToSockAddr>(dest_addr: T) -> Result<Self, TcpError> {
+    pub fn new<T: ToSockAddr>(dest_addr: T, src_port: Option<u16>) -> Result<Self, TcpError> {
         // Create socket and bind to active interface
         let target_itf = os::get_active_wifi_interface()
             .unwrap()
@@ -173,7 +174,8 @@ impl TcpConnection {
 
                 match res {
                     Ok(dest_mac) => {
-                        let src_port_guard = PortGuard::new()?;
+                        let port = src_port.unwrap_or(0);
+                        let src_port_guard = PortGuard::new(port)?;
 
                         let mut conn = Self {
                             src_mac: src_mac,
@@ -710,8 +712,6 @@ fn send_syn(
             );
 
             let frame_as_bytes: Vec<u8> = Vec::try_from(&frame).map_err(|_| TcpError::Handshake)?;
-
-            println!("{}", frame);
 
             let bytes_sent = unsafe {
                 send(

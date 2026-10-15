@@ -16,7 +16,7 @@ mod os;
 fn main() {
     
 
-    let new_conn = net::TcpConnection::new("45.33.32.156:80").unwrap();
+    let new_conn = net::TcpConnection::new("45.33.32.156:80", None).unwrap();
 
     let http_payload = "GET / HTTP/1.1\r\nHost: scanme.nmap.org\r\nConnection: close\r\n\r\n"
         .to_string()

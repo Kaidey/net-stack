@@ -279,7 +279,6 @@ impl Segment {
     }
 }
 
-// TODO: Error handling
 pub enum SegmentError {
     InvalidTcpSegment,
     ProtocolMismatch,
