@@ -154,13 +154,6 @@ pub enum DatagramError {
     ProtocolMismatch,
 }
 
-// #[derive(Debug, Clone, PartialEq, Eq)]
-// pub enum IPv4Payload {
-//     Tcp(Datagram<tcp::Segment>),
-//     // Udp(Datagram<udp::Segment>),
-//     Unknown(Datagram<UnknownPayload>),
-// }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownPayload(u8, Vec<u8>);
 

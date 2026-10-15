@@ -1,13 +1,10 @@
 use core::fmt;
 use std::{
-    ops::{BitOr, BitOrAssign},
-    sync::LazyLock,
-    time::Instant,
+    net::SocketAddr, ops::{BitOr, BitOrAssign}, sync::LazyLock, time::Instant,
 };
 
 use crate::net::com::{
-    address::{IPv4Address, IpAddr},
-    utils,
+    address::{IPv4Address, IpAddr, SockAddr}, utils,
 };
 use crate::{crypto, net::com::PduPayload};
 
@@ -154,18 +151,16 @@ pub struct Segment {
 
 impl Segment {
     pub fn new(
-        src_ip: IpAddr,
-        src_port: u16,
-        dest_ip: IpAddr,
-        dest_port: u16,
+        src_sock_addr: SockAddr,
+        dest_sock_addr: SockAddr,
         flags: Flags,
         payload: Vec<u8>,
     ) -> Result<Self, SegmentError> {
         let default_hlen = 20;
 
         Ok(Self {
-            src_port: src_port,
-            dest_port: dest_port,
+            src_port: src_sock_addr.port(),
+            dest_port: dest_sock_addr.port(),
             seq_num: 0,
             ack_num: 0,
             hlen: default_hlen,
@@ -176,13 +171,11 @@ impl Segment {
             opts: vec![],
             payload: payload,
         }
-        // TODO: Check if ISN generation is the same for IPv4 and IPv6 addresses, otherwise this
-        // doesn't work
         .gen_isn(
-            &src_ip.addr_bytes(),
-            &src_port.to_be_bytes(),
-            &dest_ip.addr_bytes(),
-            &dest_port.to_be_bytes(),
+            &src_sock_addr.addr_bytes(),
+            &src_sock_addr.port().to_be_bytes(),
+            &dest_sock_addr.addr_bytes(),
+            &dest_sock_addr.port().to_be_bytes(),
             crypto::SECRET.bytes(),
         ))
     }
@@ -245,8 +238,8 @@ impl Segment {
 
     pub fn checksum_ipv4(
         mut self,
-        src_ip: IPv4Address,
-        dest_ip: IPv4Address,
+        src_ip: &IPv4Address,
+        dest_ip: &IPv4Address,
         proto: u8,
     ) -> Result<Self, SegmentError> {
         let mut bytes_for_checksum: Vec<u8> = Vec::new();

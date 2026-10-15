@@ -6,6 +6,36 @@ use std::{
     ptr,
 };
 
+pub struct ItfAddrs {
+    ipv4: Option<[u8; 4]>,
+    ipv6: Option<[u8; 16]>,
+}
+
+impl ItfAddrs {
+    pub fn new() -> Self {
+        Self {
+            ipv4: None,
+            ipv6: None,
+        }
+    }
+
+    pub fn set_ipv4(&mut self, addr: [u8; 4]) {
+        self.ipv4 = Some(addr);
+    }
+
+    pub fn set_ipv6(&mut self, addr: [u8; 16]) {
+        self.ipv6 = Some(addr);
+    }
+
+    pub fn get_ipv4(&self) -> Option<[u8;4]>{
+        self.ipv4
+    }
+
+    pub fn get_ipv6(&self) -> Option<[u8;16]>{
+        self.ipv6
+    }
+}
+
 pub fn drop_root_privilege() {
     unsafe {
         // Drop supplimentary groups
@@ -157,8 +187,10 @@ pub fn get_itf_mac_addr(target_itf_name: &str) -> Result<Option<String>, io::Err
     Ok(None)
 }
 
-pub fn get_itf_ipv4_addr(target_itf_name: &str) -> Result<Option<[u8; 4]>, io::Error> {
+pub fn get_itf_addrs(target_itf_name: &str) -> Result<ItfAddrs, io::Error> {
     let current_os = std::env::consts::OS;
+
+    let mut itf_addrs = ItfAddrs::new();
 
     if current_os == "linux" {
         unsafe {
@@ -181,13 +213,17 @@ pub fn get_itf_ipv4_addr(target_itf_name: &str) -> Result<Option<[u8; 4]>, io::E
                             // IPv4 family
                             libc::AF_INET => {
                                 let ip_sockaddr_ptr = next_addr.ifa_addr as *mut libc::sockaddr_in;
-                                // to_ne_bytes() is used here because s_addr is already stored in
-                                // network byte order. Meaning the most significant byte of the
-                                // address is stored as the msb of the in-memory byte sequence
+                                // to_ne_bytes() is used here because s_addr is a u32 which we need to convert to a byte array
+                                // However, the u32 is already  stored in network byte order. Meaning the most significant byte 
+                                // of the address is stored as the msb of the in-memory byte sequence aka big-endian
                                 let addr_bytes = (*ip_sockaddr_ptr).sin_addr.s_addr.to_ne_bytes();
-                                return Ok(Some(addr_bytes));
+                                itf_addrs.set_ipv4(addr_bytes)
                             }
-                            // libc::AF_INET& -> IPv6 address family
+                            libc::AF_INET6 => {
+                                let ip_sockaddr_ptr = next_addr.ifa_addr as *mut libc::sockaddr_in6;
+                                let addr_bytes = (*ip_sockaddr_ptr).sin6_addr.s6_addr;
+                                itf_addrs.set_ipv6(addr_bytes)
+                            }
                             _ => {}
                         }
                     }
@@ -200,7 +236,7 @@ pub fn get_itf_ipv4_addr(target_itf_name: &str) -> Result<Option<[u8; 4]>, io::E
             }
         }
     }
-    Ok(None)
+    Ok(itf_addrs)
 }
 
 pub enum IpTableRuleAction {

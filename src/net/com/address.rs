@@ -8,6 +8,7 @@ pub enum AddressError {
     MissingPort,
     InvalidPort,
     NotImplemented,
+    AddressFamilyMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,67 +117,6 @@ impl fmt::Display for HardwareAddress {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct IPv4Address(pub [u8; 4]);
-
-impl IPv4Address {
-    pub const CODEPOINT: u16 = 0x0800;
-    pub const LENGTH: usize = 4;
-    pub fn addr_bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl TryFrom<&[u8]> for IPv4Address {
-    type Error = AddressError;
-    fn try_from(bytes: &[u8]) -> Result<IPv4Address, Self::Error> {
-        if bytes.len() != 4 {
-            return Err(AddressError::NotEnoughOctets);
-        }
-
-        let mut byte_array: [u8; 4] = [0; 4];
-        byte_array.copy_from_slice(&bytes);
-
-        Ok(IPv4Address(byte_array))
-    }
-}
-
-impl From<&str> for IPv4Address {
-    fn from(str: &str) -> Self {
-        let bytes = str
-            .split(".")
-            .map(|oct| {
-                String::from(oct)
-                    .parse::<u8>()
-                    .expect("Error converting IPv4 address to bytes")
-            })
-            .collect::<Vec<u8>>();
-
-        if bytes.len() != 4 {
-            //TODO: Handle errors
-            panic!("Wrong")
-        }
-
-        let mut byte_array: [u8; 4] = [0; 4];
-        byte_array.copy_from_slice(&bytes);
-
-        IPv4Address(byte_array)
-    }
-}
-
-impl fmt::Display for IPv4Address {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let as_str = self
-            .0
-            .iter()
-            .map(|b| format!("{}", b))
-            .collect::<Vec<String>>()
-            .join(".");
-
-        write!(f, "{}", as_str)
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct MacAddress(pub [u8; 6]);
 
 impl MacAddress {
@@ -277,6 +217,67 @@ impl fmt::Display for MacAddress {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct IPv4Address(pub [u8; 4]);
+
+impl IPv4Address {
+    pub const CODEPOINT: u16 = 0x0800;
+    pub const LENGTH: usize = 4;
+    pub fn addr_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl TryFrom<&[u8]> for IPv4Address {
+    type Error = AddressError;
+    fn try_from(bytes: &[u8]) -> Result<IPv4Address, Self::Error> {
+        if bytes.len() != 4 {
+            return Err(AddressError::NotEnoughOctets);
+        }
+
+        let mut byte_array: [u8; 4] = [0; 4];
+        byte_array.copy_from_slice(&bytes);
+
+        Ok(IPv4Address(byte_array))
+    }
+}
+
+impl From<&str> for IPv4Address {
+    fn from(str: &str) -> Self {
+        let bytes = str
+            .split(".")
+            .map(|oct| {
+                String::from(oct)
+                    .parse::<u8>()
+                    .expect("Error converting IPv4 address to bytes")
+            })
+            .collect::<Vec<u8>>();
+
+        if bytes.len() != 4 {
+            //TODO: Handle errors
+            panic!("Wrong")
+        }
+
+        let mut byte_array: [u8; 4] = [0; 4];
+        byte_array.copy_from_slice(&bytes);
+
+        IPv4Address(byte_array)
+    }
+}
+
+impl fmt::Display for IPv4Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let as_str = self
+            .0
+            .iter()
+            .map(|b| format!("{}", b))
+            .collect::<Vec<String>>()
+            .join(".");
+
+        write!(f, "{}", as_str)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IPv6Address([u8; 16]);
 
@@ -304,24 +305,97 @@ pub enum IpAddr {
 }
 
 impl IpAddr {
-    pub fn addr_bytes(self) -> Vec<u8> {
+    pub fn addr_bytes(&self) -> &[u8] {
         match self {
-            IpAddr::V4(addr) => return addr.addr_bytes().to_vec(),
-            IpAddr::V6(_addr) => return vec![],
+            IpAddr::V4(addr) => addr.addr_bytes(),
+            IpAddr::V6(_addr) => &[0],
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SockAddr(pub IpAddr, pub u16);
+pub struct SockAddrV4(pub IPv4Address, pub u16);
 
-impl SockAddr {
-    pub fn ip_addr(self) -> IpAddr {
+impl SockAddrV4 {
+    pub fn addr(&self) -> IPv4Address {
         self.0
     }
 
-    pub fn port(self) -> u16 {
+    pub fn port(&self) -> u16 {
         self.1
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SockAddrV6(pub IPv6Address, pub u16);
+
+impl SockAddrV6 {
+    pub fn addr(&self) -> IPv6Address {
+        self.0
+    }
+
+    pub fn port(&self) -> u16 {
+        self.1
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SockAddr {
+    V4(SockAddrV4),
+    V6(SockAddrV6),
+}
+
+impl SockAddr {
+    pub fn addr_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::V4(sock_addr) => sock_addr.addr().addr_bytes().to_vec(),
+            Self::V6(sock_addr) => sock_addr.addr().addr_bytes().to_vec(),
+        }
+    }
+
+    pub fn port(&self) -> u16 {
+        match self {
+            Self::V4(addr) => addr.port(),
+            Self::V6(addr) => addr.port(),
+        }
+    }
+}
+
+impl TryFrom<&SockAddr> for IPv4Address {
+    type Error = AddressError;
+    fn try_from(value: &SockAddr) -> Result<Self, Self::Error> {
+        match value {
+            SockAddr::V4(sock_addr) => Ok(sock_addr.addr().to_owned()),
+            _ => return Err(AddressError::AddressFamilyMismatch),
+        }
+    }
+}
+impl TryFrom<&SockAddr> for IPv6Address {
+    type Error = AddressError;
+    fn try_from(value: &SockAddr) -> Result<Self, Self::Error> {
+        match value {
+            SockAddr::V6(sock_addr) => Ok(sock_addr.addr().to_owned()),
+            _ => return Err(AddressError::AddressFamilyMismatch),
+        }
+    }
+}
+
+impl TryFrom<&SockAddr> for SockAddrV4 {
+    type Error = AddressError;
+    fn try_from(value: &SockAddr) -> Result<Self, Self::Error> {
+        match value {
+            SockAddr::V4(sock_addr) => Ok(sock_addr.to_owned()),
+            _ => return Err(AddressError::AddressFamilyMismatch),
+        }
+    }
+}
+impl TryFrom<&SockAddr> for SockAddrV6 {
+    type Error = AddressError;
+    fn try_from(value: &SockAddr) -> Result<Self, Self::Error> {
+        match value {
+            SockAddr::V6(sock_addr) => Ok(sock_addr.to_owned()),
+            _ => return Err(AddressError::AddressFamilyMismatch),
+        }
     }
 }
 
@@ -333,6 +407,7 @@ impl ToSockAddr for &str {
     fn to_sock_addr(&self) -> Result<SockAddr, AddressError> {
         // Handles direct ip:port strings
         // TODO: Handle host names with DNS
+        // TODO: Handle IPv6
         let slices = self.split(":").collect::<Vec<&str>>();
 
         if slices.len() != 2 || slices[1].is_empty() {
@@ -355,6 +430,6 @@ impl ToSockAddr for &str {
             dest_port = (dest_port as u16) * 10 + (d as u16);
         }
 
-        Ok(SockAddr(IpAddr::V4(dest_ip), dest_port))
+        Ok(SockAddr::V4(SockAddrV4(dest_ip, dest_port)))
     }
 }

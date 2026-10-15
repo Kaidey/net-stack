@@ -11,7 +11,7 @@ use crate::net::{
     com::{
         address::{
             HardwareAddress, IPv4Address, IPv6Address, IpAddr, MacAddress, ProtocolAddress,
-            SockAddr, ToSockAddr,
+            SockAddr, SockAddrV4, SockAddrV6, ToSockAddr,
         },
         arp,
         ethernet::Frame,
@@ -73,17 +73,45 @@ impl Drop for PortGuard {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Helps guarantee that a TcpConnection cannot be created where dest and src addresses have an IP
+// family mismatch
+enum ConnectionEndpoints {
+    V4(SockAddrV4, SockAddrV4),
+    V6(SockAddrV6, SockAddrV6),
+}
+
+impl ConnectionEndpoints {
+    fn get_addrs_bytes(self) -> (Vec<u8>, Vec<u8>) {
+        match self {
+            ConnectionEndpoints::V4(src, dest) => (
+                src.addr().addr_bytes().to_vec(),
+                dest.addr().addr_bytes().to_vec(),
+            ),
+            ConnectionEndpoints::V6(src, dest) => (
+                src.addr().addr_bytes().to_vec(),
+                dest.addr().addr_bytes().to_vec(),
+            ),
+        }
+    }
+
+    fn get_addrs_ports(self) -> (u16, u16) {
+        match self {
+            ConnectionEndpoints::V4(src, dest) => (src.port(), dest.port()),
+            ConnectionEndpoints::V6(src, dest) => (src.port(), dest.port()),
+        }
+    }
+}
+
 pub struct TcpConnection {
     sock_fd: i32,
     src_mac: MacAddress,
     dest_mac: MacAddress,
-    src_sock_addr: SockAddr,
-    dest_sock_addr: SockAddr,
+    conn_endpoints: ConnectionEndpoints,
     seq_num: u32,
     ack_num: u32,
     state: TcpState,
     time_wait_deadline: Option<std::time::Instant>,
-    //
     src_port_guard: PortGuard,
 }
 
@@ -119,6 +147,7 @@ pub enum TcpError {
     Placeholder,
     SourceDestIpTypeMismatch,
     NotImplemented,
+    EndpointAddrFamilyMismatch,
 }
 
 impl TcpConnection {
@@ -144,69 +173,75 @@ impl TcpConnection {
             .to_sock_addr()
             .map_err(|_| TcpError::InvalidAddress)?;
 
-        let mut src_ip: Option<IpAddr> = None;
+        // Get both IP addresses for target interface
+        let itf_addrs = os::get_itf_addrs(&target_itf).map_err(|_| TcpError::GetSourceIp)?;
+        let mut conn: Option<TcpConnection> = None;
 
-        // Source IP should match the type of the dest IP (4 or 6)
-        match dest_sock_addr.ip_addr() {
-            IpAddr::V4(_) => {
-                // Get IPv4 addr of net interface target_itf
-                let itf_ip_res: Option<[u8; 4]> =
-                    os::get_itf_ipv4_addr(&target_itf).map_err(|_| TcpError::GetSourceIp)?;
-                match itf_ip_res {
-                    Some(itf_ip) => {
-                        let ip_addr = IPv4Address::try_from(itf_ip.as_slice());
+        // Use the same IP family as the dest address for the local address
+        match dest_sock_addr {
+            SockAddr::V4(sock_addr) => {
+                let addr = itf_addrs.get_ipv4().ok_or(TcpError::GetSourceIp)?;
 
-                        match ip_addr {
-                            Ok(addr) => src_ip = Some(IpAddr::V4(addr)),
-                            Err(_) => return Err(TcpError::GetSourceIp),
-                        }
-                    }
-                    None => return Err(TcpError::GetSourceIp),
-                };
+                let ipv4_addr =
+                    IPv4Address::try_from(addr.as_slice()).map_err(|_| TcpError::GetSourceIp)?;
+
+                let dest_mac = compute_dest_mac_ipv4(sock_fd, src_mac, ipv4_addr, sock_addr.addr())
+                    .map_err(|_| TcpError::GetDestMac)?;
+
+                let port = src_port.unwrap_or(0);
+                let src_port_guard = PortGuard::new(port)?;
+
+                let src_sock_addr = SockAddrV4(ipv4_addr, src_port_guard.port);
+
+                let endp = ConnectionEndpoints::V4(
+                    src_sock_addr,
+                    SockAddrV4::try_from(&dest_sock_addr)
+                        .map_err(|_| TcpError::EndpointAddrFamilyMismatch)?,
+                );
+
+                conn = Some(Self {
+                    src_mac: src_mac,
+                    dest_mac: dest_mac,
+                    sock_fd: sock_fd,
+                    conn_endpoints: endp,
+                    seq_num: 0,
+                    ack_num: 0,
+                    state: TcpState::Closed,
+                    time_wait_deadline: None,
+                    src_port_guard: src_port_guard,
+                });
             }
-            IpAddr::V6(_) => {}
+            // TODO
+            SockAddr::V6(_sock_addr) => {
+                let addr = itf_addrs.get_ipv6();
+                if addr == None {
+                    return Err(TcpError::GetSourceIp);
+                }
+
+                // let ipv6_addr = IPv6Address::try_from(addr.unwrap().as_slice())
+                //     .map_err(|_| TcpError::GetSourceIp)?;
+                //
+                // let dest_mac = compute_dest_mac_ipv6(sock_fd, src_mac, ipv6_addr, sock_addr.addr())
+                //     .map_err(|_| TcpError::GetDestMac)?;
+            }
         }
 
-        // If we were successfull in computing our src_ip, compute dest_mac and establish connection
-        match src_ip {
-            Some(src_ip_addr) => {
-                let res = compute_dest_mac(sock_fd, src_mac, src_ip_addr, dest_sock_addr.ip_addr());
-
-                match res {
-                    Ok(dest_mac) => {
-                        let port = src_port.unwrap_or(0);
-                        let src_port_guard = PortGuard::new(port)?;
-
-                        let mut conn = Self {
-                            src_mac: src_mac,
-                            dest_mac: dest_mac,
-                            sock_fd: sock_fd,
-                            src_sock_addr: SockAddr(src_ip_addr, src_port_guard.port),
-                            dest_sock_addr: dest_sock_addr,
-                            seq_num: 0,
-                            ack_num: 0,
-                            state: TcpState::Closed,
-                            time_wait_deadline: None,
-                            src_port_guard: src_port_guard,
-                        };
-
-                        let hdsk_res = conn.handshake();
-                        match hdsk_res {
-                            Ok(_) => {
-                                if conn.state == TcpState::Established {
-                                    println!("Handshake completed! {:?}", conn.state);
-                                    return Ok(conn);
-                                } else {
-                                    return Err(TcpError::Handshake);
-                                }
-                            }
-                            Err(_) => return Err(TcpError::Handshake),
+        match conn {
+            Some(mut c) => {
+                let hdsk_res = c.handshake();
+                match hdsk_res {
+                    Ok(_) => {
+                        if c.state == TcpState::Established {
+                            println!("Handshake completed! {:?}", c.state);
+                            return Ok(c);
+                        } else {
+                            return Err(TcpError::Handshake);
                         }
                     }
-                    Err(_) => return Err(TcpError::GetDestMac),
+                    Err(_) => return Err(TcpError::Handshake),
                 }
             }
-            None => return Err(TcpError::GetSourceIp),
+            None => return Err(TcpError::Placeholder),
         }
     }
 
@@ -215,10 +250,7 @@ impl TcpConnection {
             self.sock_fd,
             self.src_mac,
             self.dest_mac,
-            self.src_sock_addr.ip_addr(),
-            self.dest_sock_addr.ip_addr(),
-            self.src_sock_addr.port(),
-            self.dest_sock_addr.port(),
+            self.conn_endpoints,
             self.seq_num,
             self.ack_num,
         );
@@ -295,12 +327,17 @@ impl TcpConnection {
                                 let remote_ip_dgram: &ipv4::Datagram<tcp::Segment> = &frame.payload;
                                 let remote_tcp_seg: &tcp::Segment = &remote_ip_dgram.payload;
 
+                                let (self_src_addr_bytes, self_dest_addr_bytes) =
+                                    self.conn_endpoints.get_addrs_bytes();
+
+                                let (self_src_addr_port, self_dest_addr_port) =
+                                    self.conn_endpoints.get_addrs_ports();
+
                                 let is_from_remote = remote_ip_dgram.src_ip.addr_bytes()
-                                    == self.dest_sock_addr.ip_addr().addr_bytes()
-                                    && remote_ip_dgram.dest_ip.addr_bytes()
-                                        == self.src_sock_addr.ip_addr().addr_bytes()
-                                    && remote_tcp_seg.dest_port == self.src_sock_addr.port()
-                                    && remote_tcp_seg.src_port == self.dest_sock_addr.port();
+                                    == self_dest_addr_bytes
+                                    && remote_ip_dgram.dest_ip.addr_bytes() == self_src_addr_bytes
+                                    && remote_tcp_seg.dest_port == self_src_addr_port
+                                    && remote_tcp_seg.src_port == self_dest_addr_port;
 
                                 if is_from_remote {
                                     // All segments after handshake are expected to contain the ACK flag and
@@ -372,10 +409,7 @@ impl TcpConnection {
                                             self.sock_fd,
                                             self.src_mac,
                                             self.dest_mac,
-                                            self.src_sock_addr.ip_addr(),
-                                            self.dest_sock_addr.ip_addr(),
-                                            self.src_sock_addr.port(),
-                                            self.dest_sock_addr.port(),
+                                            self.conn_endpoints,
                                             self.seq_num,
                                             self.ack_num,
                                         )
@@ -419,10 +453,7 @@ impl TcpConnection {
             self.sock_fd,
             self.src_mac,
             self.dest_mac,
-            self.src_sock_addr.ip_addr(),
-            self.dest_sock_addr.ip_addr(),
-            self.src_sock_addr.port(),
-            self.dest_sock_addr.port(),
+            self.conn_endpoints,
         );
 
         match syn_res {
@@ -467,13 +498,17 @@ impl TcpConnection {
                         let remote_ip_dgram: &ipv4::Datagram<tcp::Segment> = &frame.payload;
                         let remote_tcp_seg: &tcp::Segment = &remote_ip_dgram.payload;
 
+                        let (self_src_addr_bytes, self_dest_addr_bytes) =
+                            self.conn_endpoints.get_addrs_bytes();
+
+                        let (self_src_addr_port, self_dest_addr_port) =
+                            self.conn_endpoints.get_addrs_ports();
+
                         let is_syn_from_remote = remote_ip_dgram.src_ip.addr_bytes()
-                            == self.dest_sock_addr.ip_addr().addr_bytes()
-                            && remote_ip_dgram.dest_ip.addr_bytes()
-                                == self.src_sock_addr.ip_addr().addr_bytes()
-                            && remote_tcp_seg.dest_port == self.src_sock_addr.port()
-                            && remote_tcp_seg.src_port == self.dest_sock_addr.port()
-                            && remote_tcp_seg.flags.contains(tcp::Flags::SYN);
+                            == self_dest_addr_bytes
+                            && remote_ip_dgram.dest_ip.addr_bytes() == self_src_addr_bytes
+                            && remote_tcp_seg.dest_port == self_src_addr_port
+                            && remote_tcp_seg.src_port == self_dest_addr_port;
 
                         let is_ack_to_syn = remote_tcp_seg.ack_num == self.seq_num;
 
@@ -492,10 +527,7 @@ impl TcpConnection {
                                 self.sock_fd,
                                 self.src_mac,
                                 self.dest_mac,
-                                self.src_sock_addr.ip_addr(),
-                                self.dest_sock_addr.ip_addr(),
-                                self.src_sock_addr.port(),
-                                self.dest_sock_addr.port(),
+                                self.conn_endpoints,
                                 self.seq_num,
                                 self.ack_num,
                             );
@@ -517,80 +549,78 @@ impl TcpConnection {
     }
 }
 
-fn compute_dest_mac(
+fn compute_dest_mac_ipv4(
     sock_fd: i32,
     src_mac: MacAddress,
-    src_ip: IpAddr,
-    dest_ip: IpAddr,
+    // This function cannot receive a ConnectionEndpoints type because a CE is only created after
+    // all 4-tuple properties are computed, including the destination MAC
+    src_ip: IPv4Address,
+    dest_ip: IPv4Address,
 ) -> Result<MacAddress, TcpError> {
-    match (src_ip, dest_ip) {
-        (IpAddr::V4(src_ip_addr), IpAddr::V4(dest_ip_addr)) => {
-            // TODO: Figure out if it's LAN addr
-            let is_lan = false;
+    // TODO: Figure out if it's LAN addr
+    let is_lan = false;
 
-            if is_lan {
-                // If LAN -> ARP for remote IP and use remote MAC
-                let dest_mac_bytes = run_arp(sock_fd, src_mac, src_ip_addr, dest_ip_addr).unwrap();
+    if is_lan {
+        // If LAN -> ARP for remote IP and use remote MAC
+        let dest_mac_bytes = run_arp(sock_fd, src_mac, src_ip, dest_ip).unwrap();
 
-                return Ok(MacAddress::try_from(dest_mac_bytes.as_slice())
-                    .map_err(|_| TcpError::ArpFailed)?);
-            } else {
-                // If not LAN -> ARP for default gateway IP and use gateway MAC
-                let gateway_ip_res = os::get_default_gateway_ipv4_addr();
+        return Ok(
+            MacAddress::try_from(dest_mac_bytes.as_slice()).map_err(|_| TcpError::ArpFailed)?
+        );
+    } else {
+        // If not LAN -> ARP for default gateway IP and use gateway MAC
+        let gateway_ip_res = os::get_default_gateway_ipv4_addr();
 
-                match gateway_ip_res {
-                    Ok(res) => match res {
-                        Some(ip_bytes) => {
-                            let gateway_ip = IPv4Address::try_from(ip_bytes.as_slice())
-                                .map_err(|_| TcpError::GetGatewayIp)?;
+        match gateway_ip_res {
+            Ok(res) => match res {
+                Some(ip_bytes) => {
+                    let gateway_ip = IPv4Address::try_from(ip_bytes.as_slice())
+                        .map_err(|_| TcpError::GetGatewayIp)?;
 
-                            let dest_mac_bytes =
-                                run_arp(sock_fd, src_mac, src_ip_addr, gateway_ip).unwrap();
+                    let dest_mac_bytes = run_arp(sock_fd, src_mac, src_ip, gateway_ip).unwrap();
 
-                            return Ok(MacAddress::try_from(dest_mac_bytes.as_slice())
-                                .map_err(|_| TcpError::ArpFailed)?);
-                        }
-                        // TODO: Review
-                        None => return Err(TcpError::GetGatewayIp),
-                    },
-                    Err(_) => return Err(TcpError::GetGatewayIp),
+                    return Ok(MacAddress::try_from(dest_mac_bytes.as_slice())
+                        .map_err(|_| TcpError::ArpFailed)?);
                 }
-            }
+                // TODO: Review
+                None => return Err(TcpError::GetGatewayIp),
+            },
+            Err(_) => return Err(TcpError::GetGatewayIp),
         }
-        // TODO: Implement Neighbour Discovery Protocol
-        (IpAddr::V6(_src), IpAddr::V6(_dest)) => return Err(TcpError::Placeholder),
-        _ => return Err(TcpError::SourceDestIpTypeMismatch),
     }
+}
+
+fn compute_dest_mac_ipv6(
+    sock_fd: i32,
+    src_mac: MacAddress,
+    src_ip: IPv6Address,
+    dest_ip: IPv6Address,
+) -> Result<MacAddress, TcpError> {
+    // TODO: Implement Neighbour Discovery Protocol
+    Ok(MacAddress::ZERO)
 }
 
 fn send_ack(
     socket_fd: i32,
     src_mac: MacAddress,
     dest_mac: MacAddress,
-    src_ip: IpAddr,
-    dest_ip: IpAddr,
-    src_port: u16,
-    dest_port: u16,
+    conn_endpoints: ConnectionEndpoints,
     seq_num: u32,
     ack_num: u32,
 ) -> Result<(), TcpError> {
-    match (src_ip, dest_ip) {
-        (IpAddr::V4(src_ipv4), IpAddr::V4(dest_ipv4)) => {
-            let seg = tcp::Segment::new(
-                src_ip,
-                src_port,
-                dest_ip,
-                dest_port,
-                tcp::Flags::ACK,
-                vec![],
-            )
-            .map_err(|_| TcpError::Placeholder)?
-            .seq(seq_num)
-            .ack(ack_num)
-            .checksum_ipv4(src_ipv4, dest_ipv4, tcp::CODEPOINT)
-            .map_err(|_| TcpError::Placeholder)?;
+    match conn_endpoints {
+        ConnectionEndpoints::V4(src, dest) => {
+            let src_generic = SockAddr::V4(src);
+            let dest_generic = SockAddr::V4(dest);
 
-            let dat = ipv4::Datagram::<tcp::Segment>::new(src_ipv4, dest_ipv4, seg.clone())
+            let seg = tcp::Segment::new(src_generic, dest_generic, tcp::Flags::ACK, vec![])
+                .map_err(|_| TcpError::Placeholder)?
+                .seq(seq_num)
+                .ack(ack_num)
+                .checksum_ipv4(&src.addr(), &dest.addr(), tcp::CODEPOINT)
+                .map_err(|_| TcpError::Placeholder)?;
+
+            let dat = ipv4::Datagram::<tcp::Segment>::new(src.addr(), dest.addr(), seg.clone())
                 .map_err(|_| TcpError::Placeholder)?
                 .checksum()
                 .map_err(|_| TcpError::Placeholder)?;
@@ -615,8 +645,7 @@ fn send_ack(
             }
             return Ok(());
         }
-        (IpAddr::V6(_src), IpAddr::V6(_dest)) => return Err(TcpError::NotImplemented),
-        _ => return Err(TcpError::SourceDestIpTypeMismatch),
+        ConnectionEndpoints::V6(_src, _dest) => return Err(TcpError::NotImplemented),
     }
 }
 
@@ -624,30 +653,28 @@ fn send_fin(
     socket_fd: i32,
     src_mac: MacAddress,
     dest_mac: MacAddress,
-    src_ip: IpAddr,
-    dest_ip: IpAddr,
-    src_port: u16,
-    dest_port: u16,
+    conn_endpoints: ConnectionEndpoints,
     seq_num: u32,
     ack_num: u32,
 ) -> Result<(), TcpError> {
-    match (src_ip, dest_ip) {
-        (IpAddr::V4(src_ipv4), IpAddr::V4(dest_ipv4)) => {
+    match conn_endpoints {
+        ConnectionEndpoints::V4(src, dest) => {
+            let src_generic = SockAddr::V4(src);
+            let dest_generic = SockAddr::V4(dest);
+
             let seg = tcp::Segment::new(
-                src_ip,
-                src_port,
-                dest_ip,
-                dest_port,
+                src_generic,
+                dest_generic,
                 tcp::Flags::FIN | tcp::Flags::ACK,
                 vec![],
             )
             .map_err(|_| TcpError::CloseConnectionFailed)?
             .seq(seq_num)
             .ack(ack_num)
-            .checksum_ipv4(src_ipv4, dest_ipv4, tcp::CODEPOINT)
+            .checksum_ipv4(&src.addr(), &dest.addr(), tcp::CODEPOINT)
             .map_err(|_| TcpError::CloseConnectionFailed)?;
 
-            let dgram = ipv4::Datagram::<tcp::Segment>::new(src_ipv4, dest_ipv4, seg.clone())
+            let dgram = ipv4::Datagram::<tcp::Segment>::new(src.addr(), dest.addr(), seg.clone())
                 .map_err(|_| TcpError::CloseConnectionFailed)?
                 .checksum()
                 .map_err(|_| TcpError::CloseConnectionFailed)?;
@@ -672,8 +699,7 @@ fn send_fin(
             }
             return Ok(());
         }
-        (IpAddr::V6(_src), IpAddr::V6(_dest)) => return Err(TcpError::NotImplemented),
-        _ => return Err(TcpError::SourceDestIpTypeMismatch),
+        ConnectionEndpoints::V6(_src, _dest) => return Err(TcpError::NotImplemented),
     }
 }
 
@@ -681,29 +707,23 @@ fn send_syn(
     socket_fd: i32,
     src_mac: MacAddress,
     dest_mac: MacAddress,
-    src_ip: IpAddr,
-    dest_ip: IpAddr,
-    src_port: u16,
-    dest_port: u16,
+    conn_endpoints: ConnectionEndpoints,
 ) -> Result<u32, TcpError> {
-    match (src_ip, dest_ip) {
-        (IpAddr::V4(src_ipv4), IpAddr::V4(dest_ipv4)) => {
-            let seg = tcp::Segment::new(
-                src_ip,
-                src_port,
-                dest_ip,
-                dest_port,
-                tcp::Flags::SYN,
-                vec![],
-            )
-            .map_err(|_| TcpError::Handshake)?
-            .checksum_ipv4(src_ipv4, dest_ipv4, tcp::CODEPOINT)
-            .map_err(|_| TcpError::Handshake)?;
+    match conn_endpoints {
+        ConnectionEndpoints::V4(src, dest) => {
+            let src_generic = SockAddr::V4(src);
+            let dest_generic = SockAddr::V4(dest);
 
-            let ip_datagram = ipv4::Datagram::<tcp::Segment>::new(src_ipv4, dest_ipv4, seg.clone())
+            let seg = tcp::Segment::new(src_generic, dest_generic, tcp::Flags::SYN, vec![])
                 .map_err(|_| TcpError::Handshake)?
-                .checksum()
+                .checksum_ipv4(&src.addr(), &dest.addr(), tcp::CODEPOINT)
                 .map_err(|_| TcpError::Handshake)?;
+
+            let ip_datagram =
+                ipv4::Datagram::<tcp::Segment>::new(src.addr(), dest.addr(), seg.clone())
+                    .map_err(|_| TcpError::Handshake)?
+                    .checksum()
+                    .map_err(|_| TcpError::Handshake)?;
 
             let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(
                 dest_mac,
@@ -729,8 +749,7 @@ fn send_syn(
             // the caller
             Ok(seg.seq_num)
         }
-        (IpAddr::V6(_src), IpAddr::V6(_dest)) => return Err(TcpError::NotImplemented),
-        _ => return Err(TcpError::SourceDestIpTypeMismatch),
+        ConnectionEndpoints::V6(_src, _dest) => return Err(TcpError::NotImplemented),
     }
 }
 

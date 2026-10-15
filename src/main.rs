@@ -3,8 +3,8 @@ mod net;
 mod os;
 
 // TODO:
-// Impl something similar to to_sock_addr (traits) in order to isolate address convertion logic
-// Impl ephemeral ports if no source port is supplied for TcpConnection
+// Size validations for TCP, UDP Segments and Eth Frames
+// Eth frame padding
 // Replace pub struct properties with getter methods or analogous
 // FIN retransmist for TCP Close and retransmits in genera
 // DSN Resolution
@@ -12,9 +12,9 @@ mod os;
 // IPv4 and TCP Options
 // TCP LIstener
 // Handle dropping iptables rule on SIGINT. Currently only handled when TCP Connection is closed
+// HTTP Client
 
 fn main() {
-    
 
     let new_conn = net::TcpConnection::new("45.33.32.156:80", None).unwrap();
 
