@@ -6,42 +6,23 @@ use core::fmt;
 
 pub const CODEPOINT: u16 = 0x0806;
 
-enum DatagramError {
-    UnknownOperation,
-    Placeholder,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operation {
-    Request,
-    Reply,
-}
+pub struct Operation(u16);
 
 impl Operation {
-    pub fn bits(self) -> u16 {
-        match self {
-            Operation::Request => 0x01,
-            Operation::Reply => 0x02,
-        }
-    }
-}
+    pub const REQUEST: Self = Self(0x0001);
+    pub const REPLY: Self = Self(0x0002);
 
-impl TryFrom<u8> for Operation {
-    type Error = DatagramError;
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0x00 => return Ok(Operation::Request),
-            0x01 => return Ok(Operation::Reply),
-            _ => return Err(DatagramError::UnknownOperation),
-        }
+    pub fn bits(self) -> u16 {
+        self.0
     }
 }
 
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
-            Operation::Request => write!(f, "Request"),
-            Operation::Reply => write!(f, "Reply"),
+            Operation::REQUEST => write!(f, "Request"),
+            Operation::REPLY => write!(f, "Reply"),
             _ => write!(f, "Unknown Operation"),
         }
     }
@@ -167,7 +148,7 @@ impl TryFrom<&[u8]> for Datagram {
                 &buffer[dest_proto_addr_start..dest_proto_addr_end],
             )
             .expect("Idk"),
-            op: Operation::try_from(u16::from_be_bytes([buffer[6], buffer[7]])).map_err(|_| DatagramError::Placeholder)?,
+            op: Operation(u16::from_be_bytes([buffer[6], buffer[7]])),
         })
     }
 }
