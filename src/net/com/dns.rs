@@ -7,6 +7,19 @@
 
 use std::fmt;
 
+use crate::net::com::address::IPv4Address;
+
+pub struct Servers(IPv4Address);
+
+impl Servers {
+    pub const GOOGLE: Self = Self(IPv4Address([8, 8, 8, 8]));
+    pub const CLOUDFLARE: Self = Self(IPv4Address([1, 1, 1, 1]));
+
+    pub fn get_ipv4(&self) -> IPv4Address {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageError {
     InvalidRecordClass,
@@ -345,7 +358,9 @@ impl TryFrom<u8> for NameControlByte {
 
                 Ok(Self::Pointer(ptr_offset))
             }
-            _ => Err(NameError::UnknownControlByte),
+            _ => {
+                return Err(NameError::UnknownControlByte);
+            }
         }
     }
 }
@@ -561,7 +576,7 @@ impl DnsPayload {
         let mut ns_records: Vec<Record> = Vec::new();
         let mut ar_records: Vec<Record> = Vec::new();
 
-        let mut next_record = question.wire_len();
+        let mut next_record = Message::HEADER_LEN + question.wire_len();
         // Parse ancount records as Answer records. The next record starts in the first byte after
         // the previous aka record.wire_len()
         while an_records.len() < ancount {
@@ -722,7 +737,7 @@ impl Message {
     // In bytes
     const HEADER_LEN: usize = 12;
 
-    pub fn new(name: &str) -> Result<Self, MessageError> {
+    pub fn query(name: &str) -> Result<Self, MessageError> {
         // TODO: The usage of serialize() makes no sense. Rethink the Name type
         let (_, field_len) = Name::serialize(name).map_err(|_| MessageError::InvalidName)?;
         let name_field = Name {
@@ -770,6 +785,10 @@ impl Message {
             ar_count: 0,
             payload: payload,
         })
+    }
+
+    pub fn id(&self) -> u16 {
+        self.id
     }
 }
 
