@@ -16,7 +16,7 @@ use crate::net::{
         arp,
         ethernet::Frame,
     },
-    socket::{reserve_tcp_port, set_tcp_sock_timeout},
+    socket::{new_reservation_sock, reserve_tcp_port, set_tcp_sock_timeout},
 };
 
 use crate::net::com::{ethernet, ipv4, tcp};
@@ -31,22 +31,34 @@ const TIME_WAIT: Duration = Duration::from_secs(60);
 struct PortGuard {
     sock_fd: i32,
     port: u16,
+    is_tcp: bool,
 }
 
 impl PortGuard {
-    fn new(request_port: u16) -> Result<Self, TcpError> {
-        let (fd, port) = reserve_tcp_port(request_port).map_err(|_| TcpError::Placeholder)?;
-        match os::switch_iptables_kernel_rst_block(port, os::IpTableRuleAction::Insert) {
-            Ok(true) => Ok(Self {
-                sock_fd: fd,
-                port: port,
-            }),
-            _ => {
-                unsafe {
-                    libc::close(fd);
+    fn new(request_port: u16, is_tcp_port: bool) -> Result<Self, TcpError> {
+        let (fd, port) = new_reservation_sock(request_port).map_err(|_| TcpError::Placeholder)?;
+
+        let mut pg = Self {
+            sock_fd: fd,
+            port: port,
+            is_tcp: false,
+        };
+
+        if is_tcp_port {
+            match os::switch_iptables_kernel_rst_block(port, os::IpTableRuleAction::Insert) {
+                Ok(true) => {
+                    pg.is_tcp = true;
+                    return Ok(pg);
                 }
-                Err(TcpError::Placeholder)
+                _ => {
+                    unsafe {
+                        libc::close(fd);
+                    }
+                    return Err(TcpError::Placeholder);
+                }
             }
+        } else {
+            return Ok(pg);
         }
     }
 }
@@ -55,17 +67,19 @@ impl PortGuard {
 // E.g: if an object holding a PortGuard type is dropped
 impl Drop for PortGuard {
     fn drop(&mut self) {
-        match os::switch_iptables_kernel_rst_block(self.port, os::IpTableRuleAction::Delete) {
-            Ok(true) => {
-                println!("Kernel-rst-block drop rule deleted successfully from iptables")
+        if self.is_tcp {
+            match os::switch_iptables_kernel_rst_block(self.port, os::IpTableRuleAction::Delete) {
+                Ok(true) => {
+                    println!("Kernel-rst-block drop rule deleted successfully from iptables")
+                }
+                Ok(false) => eprintln!(
+                    "warning: deleting kernel-rst-block drop rule for port {} failed",
+                    self.port
+                ),
+                Err(e) => eprintln!(
+                    "warning: deleting kernel-rst-block drop rule failed, could not run iptables: {e}"
+                ),
             }
-            Ok(false) => eprintln!(
-                "warning: deleting kernel-rst-block drop rule for port {} failed",
-                self.port
-            ),
-            Err(e) => eprintln!(
-                "warning: deleting kernel-rst-block drop rule failed, could not run iptables: {e}"
-            ),
         }
         unsafe {
             libc::close(self.sock_fd);
@@ -189,7 +203,7 @@ impl TcpConnection {
                     .map_err(|_| TcpError::GetDestMac)?;
 
                 let port = src_port.unwrap_or(0);
-                let src_port_guard = PortGuard::new(port)?;
+                let src_port_guard = PortGuard::new(port, true)?;
 
                 let src_sock_addr = SockAddrV4(ipv4_addr, src_port_guard.port);
 
@@ -448,7 +462,7 @@ impl TcpConnection {
         return Ok(());
     }
 
-    pub fn handshake(&mut self) -> Result<(), TcpError> {
+    fn handshake(&mut self) -> Result<(), TcpError> {
         let syn_res = send_syn(
             self.sock_fd,
             self.src_mac,
@@ -833,50 +847,3 @@ pub fn run_arp(
         };
     }
 }
-
-// let http_payload = "GET / HTTP/1.1\r\nHost: scanme.nmap.org\r\nConnection: close\r\n\r\n".to_string().into_bytes();
-//
-// let http_tcp = tcp::Segment::new(
-//     src_ip,
-//     src_port,
-//     dest_ip,
-//     dest_port,
-//     tcp::Flags::ACK | tcp::Flags::PSH,
-//     http_payload,
-// )
-// .map_err(|_| TcpError::Handshake)?
-// .seq(resp_tcp_segment.seq_num + 1)
-// .ack(remote_tcp_seg.seq_num + 1)
-// .checksum(src_ip, dest_ip, tcp::Segment::CODEPOINT)
-// .map_err(|_| TcpError::Handshake)?;
-//
-// let http_ipv4 =
-//     ipv4::Datagram::<tcp::Segment>::new(src_ip, dest_ip, http_tcp)
-//         .map_err(|_| TcpError::Handshake)?
-//         .checksum()
-//         .map_err(|_| TcpError::Handshake)?;
-//
-// let http_frame =
-//     ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::new(
-//         dest_mac,
-//         src_mac,
-//         http_ipv4,
-//     );
-//
-// let http_frame_as_bytes: Vec<u8> =
-//     Vec::try_from(&resp_frame).map_err(|_| TcpError::Handshake)?;
-//
-// let bytes_sent = unsafe {
-//     send(
-//         sock_fd,
-//         http_frame_as_bytes.as_ptr() as *const _,
-//         http_frame_as_bytes.len(),
-//         0,
-//     )
-// };
-//
-// println!("\n\nHTTP Sent:\n {}", http_frame);
-//
-// if bytes_sent < 0 {
-//     return Err(TcpError::Handshake);
-// }

@@ -1,10 +1,8 @@
 use crate::net::com::{
     PduPayload,
-    address::{self, HardwareAddress, ProtocolAddress},
+    address::{HardwareAddress, ProtocolAddress},
 };
 use core::fmt;
-
-pub const CODEPOINT: u16 = 0x0806;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Operation(u16);
@@ -39,6 +37,8 @@ pub struct Datagram {
 }
 
 impl Datagram {
+    pub const CODEPOINT: u16 = 0x0806;
+
     pub fn new(
         src_hardware_addr: HardwareAddress,
         dest_hardware_addr: HardwareAddress,
@@ -65,29 +65,25 @@ pub enum ArpError {
 }
 
 impl PduPayload for Datagram {
-    type Payload = Datagram;
     type ErrorSpace = ArpError;
     type CodepointType = u16;
 
-    fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace> {
-        let vec = Vec::try_from(payload).or_else(|_| Err(ArpError::InvalidDatagram))?;
+    fn serialize(&self) -> Result<Vec<u8>, Self::ErrorSpace> {
+        let vec = Vec::try_from(self).or_else(|_| Err(ArpError::InvalidDatagram))?;
         Ok(vec)
     }
 
-    fn deserialize_payload(
-        cp: Self::CodepointType,
-        payload: &[u8],
-    ) -> Result<Self::Payload, Self::ErrorSpace> {
-        if cp != CODEPOINT {
+    fn deserialize(cp: Self::CodepointType, payload: &[u8]) -> Result<Self, Self::ErrorSpace> {
+        if cp != Self::CODEPOINT {
             return Err(ArpError::ProtocolMismatch);
         }
-        let seg = Datagram::try_from(payload).or_else(|_| Err(ArpError::InvalidDatagram))?;
+        let seg = Self::try_from(payload).or_else(|_| Err(ArpError::InvalidDatagram))?;
         Ok(seg)
     }
-    fn codepoint(_payload: &Self::Payload) -> Self::CodepointType {
-        CODEPOINT
+    fn codepoint(&self) -> Self::CodepointType {
+        Self::CODEPOINT
     }
-    fn name() -> String {
+    fn kind(&self) -> String {
         String::from("ARP")
     }
 }

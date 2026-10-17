@@ -1,10 +1,13 @@
 use core::fmt;
 use std::{
-    net::SocketAddr, ops::{BitOr, BitOrAssign}, sync::LazyLock, time::Instant,
+    ops::{BitOr, BitOrAssign},
+    sync::LazyLock,
+    time::Instant,
 };
 
 use crate::net::com::{
-    address::{IPv4Address, IpAddr, SockAddr}, utils,
+    address::{IPv4Address, SockAddr},
+    utils,
 };
 use crate::{crypto, net::com::PduPayload};
 
@@ -29,7 +32,6 @@ impl Clock {
 // A LazyLock is a thread safe type that allows a value to be initialized on first access and then
 // provides thread-wide read access for the lifetime of the process
 static CLOCK: LazyLock<Clock> = LazyLock::new(Clock::new);
-pub const CODEPOINT: u8 = 0x06;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // Tuple struct. It has one unnamed field of type u16
@@ -150,6 +152,8 @@ pub struct Segment {
 }
 
 impl Segment {
+    pub const CODEPOINT: u8 = 0x06;
+
     pub fn new(
         src_sock_addr: SockAddr,
         dest_sock_addr: SockAddr,
@@ -278,29 +282,25 @@ pub enum SegmentError {
 }
 
 impl PduPayload for Segment {
-    type Payload = Segment;
     type ErrorSpace = SegmentError;
     type CodepointType = u8;
 
-    fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace> {
-        let vec = Vec::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
+    fn serialize(&self) -> Result<Vec<u8>, Self::ErrorSpace> {
+        let vec = Vec::try_from(self).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
         Ok(vec)
     }
 
-    fn deserialize_payload(
-        cp: Self::CodepointType,
-        payload: &[u8],
-    ) -> Result<Self::Payload, Self::ErrorSpace> {
-        if cp != CODEPOINT {
+    fn deserialize(cp: Self::CodepointType, payload: &[u8]) -> Result<Self, Self::ErrorSpace> {
+        if cp != Self::CODEPOINT {
             return Err(SegmentError::ProtocolMismatch);
         }
-        let seg = Segment::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
+        let seg = Self::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
         Ok(seg)
     }
-    fn codepoint(_payload: &Self::Payload) -> Self::CodepointType {
-        CODEPOINT
+    fn codepoint(&self) -> Self::CodepointType {
+        Self::CODEPOINT
     }
-    fn name() -> String {
+    fn kind(&self) -> String {
         String::from("TCP")
     }
 }

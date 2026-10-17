@@ -2,13 +2,12 @@ use core::fmt;
 
 use crate::net::com::{
     PduPayload,
-    address::{AddressError, IPv4Address},
-    tcp, utils,
+    address::{IPv4Address},
+     utils,
 };
 
 // TODO: Review. This might be a problem for multi-thread
 static mut NEXT_ID: u16 = 0;
-pub const CODEPOINT: u16 = 0x0800;
 
 fn next_datagram_id() -> u16 {
     unsafe {
@@ -158,23 +157,19 @@ pub enum DatagramError {
 pub struct UnknownPayload(u8, Vec<u8>);
 
 impl PduPayload for UnknownPayload {
-    type Payload = UnknownPayload;
     type ErrorSpace = DatagramError;
     type CodepointType = u8;
 
-    fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace> {
-        Ok((*payload).1.to_vec())
+    fn serialize(&self) -> Result<Vec<u8>, Self::ErrorSpace> {
+        Ok(self.1.to_vec())
     }
-    fn deserialize_payload(
-        cp: Self::CodepointType,
-        payload: &[u8],
-    ) -> Result<Self::Payload, Self::ErrorSpace> {
-        Ok(UnknownPayload(cp, payload.to_vec()))
+    fn deserialize(cp: Self::CodepointType, payload: &[u8]) -> Result<Self, Self::ErrorSpace> {
+        Ok(Self(cp, payload.to_vec()))
     }
-    fn codepoint(payload: &Self::Payload) -> Self::CodepointType {
-        payload.0
+    fn codepoint(&self) -> Self::CodepointType {
+        self.0
     }
-    fn name() -> String {
+    fn kind(&self) -> String {
         String::from("")
     }
 }
@@ -207,17 +202,20 @@ pub struct Datagram<P: PduPayload<CodepointType = u8>> {
     pub src_ip: IPv4Address,
     pub dest_ip: IPv4Address,
     opts: Vec<u8>,
-    pub payload: P::Payload,
+    pub payload: P,
 }
 
 impl<P: PduPayload<CodepointType = u8>> Datagram<P> {
+    pub const CODEPOINT: u16 = 0x0800;
+
     pub fn new(
         src_ip: IPv4Address,
         dest_ip: IPv4Address,
-        payload: P::Payload,
+        payload: P,
     ) -> Result<Self, DatagramError> {
         let default_hlen: usize = 20;
-        let payload_len = P::serialize_payload(&payload)
+        let payload_len = payload
+            .serialize()
             .or_else(|_| Err(DatagramError::PayloadWrong))?
             .len();
         let total_len: usize = default_hlen + payload_len;
@@ -277,7 +275,9 @@ impl<P: PduPayload<CodepointType = u8>> Datagram<P> {
         }
 
         self.hlen = post_padding_hlen;
-        let payload_len = P::serialize_payload(&self.payload)
+        let payload_len = self
+            .payload
+            .serialize()
             .or_else(|_| Err(DatagramError::PayloadWrong))?
             .len();
         self.total_len = post_padding_hlen + payload_len;
@@ -300,32 +300,28 @@ impl<P: PduPayload<CodepointType = u8>> Datagram<P> {
 // PduPayload which itself carries a PduPayload P,thus implementing PduPayload for Datagram
 // over a generic P which needs to also implement PduPayload with codepoint being a u8
 impl<P: PduPayload<CodepointType = u8>> PduPayload for Datagram<P> {
-    type Payload = Datagram<P>;
     type ErrorSpace = DatagramError;
     type CodepointType = u16;
 
-    fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace> {
-        let vec = Vec::try_from(payload).or_else(|_| Err(DatagramError::AddressParsingFailed))?;
+    fn serialize(&self) -> Result<Vec<u8>, Self::ErrorSpace> {
+        let vec = Vec::try_from(self).or_else(|_| Err(DatagramError::AddressParsingFailed))?;
         Ok(vec)
     }
 
-    fn deserialize_payload(
-        cp: Self::CodepointType,
-        payload: &[u8],
-    ) -> Result<Self::Payload, Self::ErrorSpace> {
-        if cp != CODEPOINT {
+    fn deserialize(cp: Self::CodepointType, payload: &[u8]) -> Result<Self, Self::ErrorSpace> {
+        if cp != Self::CODEPOINT {
             return Err(DatagramError::ProtocolMismatch);
         }
         let datag =
-            Datagram::try_from(payload).or_else(|_| Err(DatagramError::AddressParsingFailed))?;
+            Self::try_from(payload).or_else(|_| Err(DatagramError::AddressParsingFailed))?;
 
         Ok(datag)
     }
 
-    fn codepoint(_payload: &Self::Payload) -> Self::CodepointType {
-        CODEPOINT
+    fn codepoint(&self) -> Self::CodepointType {
+        Self::CODEPOINT
     }
-    fn name() -> String {
+    fn kind(&self) -> String {
         String::from("IPv4")
     }
 }
@@ -350,7 +346,9 @@ impl<P: PduPayload<CodepointType = u8>> TryFrom<&Datagram<P>> for Vec<u8> {
         bytes.extend_from_slice(&datagram.src_ip.addr_bytes());
         bytes.extend_from_slice(&datagram.dest_ip.addr_bytes());
         bytes.extend_from_slice(&datagram.opts);
-        let serialized_payload = P::serialize_payload(&datagram.payload)
+        let serialized_payload = datagram
+            .payload
+            .serialize()
             .or_else(|_| Err(DatagramError::PayloadWrong))?;
         bytes.extend_from_slice(&serialized_payload);
 
@@ -387,7 +385,7 @@ impl<P: PduPayload<CodepointType = u8>> TryFrom<&[u8]> for Datagram<P> {
             // TODO: Option parser
             opts: buffer[20..hlen_in_bytes].to_vec(),
             // buffer[9] is the next protocol field aka the protocol codepoint
-            payload: P::deserialize_payload(buffer[9], &buffer[hlen_in_bytes..])
+            payload: P::deserialize(buffer[9], &buffer[hlen_in_bytes..])
                 .or_else(|_| Err(DatagramError::PayloadWrong))?,
         })
     }
@@ -411,8 +409,8 @@ impl<P: PduPayload<CodepointType = u8>> fmt::Display for Datagram<P> {
         write!(
             f,
             "\nNext Level Protocol: {:02X} ({})",
-            P::codepoint(&self.payload),
-            P::name()
+            self.payload.codepoint(),
+            self.kind()
         )?;
         write!(f, "\nChecksum: {:04X}", self.checksum)?;
         write!(f, "\nSource Address: {}", self.src_ip)?;

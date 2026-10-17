@@ -18,23 +18,19 @@ pub enum FrameError {
 pub struct UnknownPayload(u16, Vec<u8>);
 
 impl PduPayload for UnknownPayload {
-    type Payload = UnknownPayload;
     type ErrorSpace = FrameError;
     type CodepointType = u16;
 
-    fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace> {
-        Ok((*payload).1.to_vec())
+    fn serialize(&self) -> Result<Vec<u8>, Self::ErrorSpace> {
+        Ok(self.1.to_vec())
     }
-    fn deserialize_payload(
-        cp: Self::CodepointType,
-        payload: &[u8],
-    ) -> Result<Self::Payload, Self::ErrorSpace> {
-        Ok(UnknownPayload(cp, payload.to_vec()))
+    fn deserialize(cp: Self::CodepointType, payload: &[u8]) -> Result<Self, Self::ErrorSpace> {
+        Ok(Self(cp, payload.to_vec()))
     }
-    fn codepoint(payload: &Self::Payload) -> Self::CodepointType {
-        payload.0
+    fn codepoint(&self) -> Self::CodepointType {
+        self.0
     }
-    fn name() -> String {
+    fn kind(&self) -> String {
         String::from("")
     }
 }
@@ -48,8 +44,7 @@ impl fmt::Display for UnknownPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Frame<P: PduPayload<CodepointType = u16>>
-{
+pub struct Frame<P: PduPayload<CodepointType = u16>> {
     dest_mac_address: MacAddress,
     src_mac_address: MacAddress,
     pub payload: P::Payload,
@@ -79,8 +74,10 @@ impl<P: PduPayload<CodepointType = u16>> TryFrom<&Frame<P>> for Vec<u8> {
         bytes.extend_from_slice(&frame.src_mac_address.addr_bytes());
         // EtherType
         bytes.extend_from_slice(&P::codepoint(&frame.payload).to_be_bytes());
-        let serialized_payload =
-            P::serialize_payload(&frame.payload).or_else(|_| Err(FrameError::FrameBad))?;
+        let serialized_payload = frame
+            .payload
+            .serialize()
+            .or_else(|_| Err(FrameError::FrameBad))?;
         bytes.extend_from_slice(&serialized_payload);
 
         Ok(bytes)
@@ -101,7 +98,7 @@ impl<P: PduPayload<CodepointType = u16>> TryFrom<&[u8]> for Frame<P> {
         Ok(Self {
             dest_mac_address: dest_mac,
             src_mac_address: src_mac,
-            payload: P::deserialize_payload(eth_type, &buffer[14..])
+            payload: P::deserialize(eth_type, &buffer[14..])
                 .or_else(|_| Err(FrameError::FrameBad))?,
         })
     }
@@ -114,8 +111,8 @@ impl<P: PduPayload<CodepointType = u16>> fmt::Display for Frame<P> {
         write!(
             f,
             "\nFrame Type/Length: {:04X?} ({})",
-            P::codepoint(&self.payload),
-            P::name()
+            self.payload.codepoint(),
+            self.payload.kind()
         )?;
         write!(f, "\nPayload: {}", self.payload)?;
 

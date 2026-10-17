@@ -62,7 +62,7 @@ fn interface_bind_packet_socket(sock_fd: i32, net_itf: CString) {
 // the process ends, the kernel closes the socket automatically. Its file descriptor also needs to
 // stay in scope for the socket to remain open and port reserved. For these reasons, the fd is also
 // returned
-pub fn reserve_tcp_port(requested_port: u16) -> Result<(i32, u16), std::io::Error> {
+pub fn new_reservation_sock(requested_port: u16) -> Result<(i32, u16), std::io::Error> {
     let fd = unsafe { socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0) };
     if fd < 0 {
         panic!(

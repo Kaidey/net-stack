@@ -1,7 +1,9 @@
-use crate::net::com::{utils, PduPayload, address::{SockAddr, IPv4Address}};
+use crate::net::com::{
+    PduPayload,
+    address::{IPv4Address, SockAddr},
+    utils,
+};
 use core::fmt;
-
-pub const CODEPOINT: u8 = 0x11;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
@@ -14,6 +16,8 @@ pub struct Segment {
 }
 
 impl Segment {
+    pub const CODEPOINT: u8 = 0x11;
+
     pub fn new(
         src_sock_addr: SockAddr,
         dest_sock_addr: SockAddr,
@@ -67,35 +71,35 @@ impl Segment {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SegmentError {
     InvalidTcpSegment,
     ProtocolMismatch,
 }
 
 impl PduPayload for Segment {
-    type Payload = Segment;
     type ErrorSpace = SegmentError;
     type CodepointType = u8;
 
-    fn serialize_payload(payload: &Self::Payload) -> Result<Vec<u8>, Self::ErrorSpace> {
-        let vec = Vec::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
+    fn serialize(&self) -> Result<Vec<u8>, Self::ErrorSpace> {
+        let vec = Vec::try_from(self).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
         Ok(vec)
     }
 
-    fn deserialize_payload(
+    fn deserialize(
         cp: Self::CodepointType,
         payload: &[u8],
-    ) -> Result<Self::Payload, Self::ErrorSpace> {
-        if cp != CODEPOINT {
+    ) -> Result<Self, Self::ErrorSpace> {
+        if cp != Self::CODEPOINT {
             return Err(SegmentError::ProtocolMismatch);
         }
-        let seg = Segment::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
+        let seg = Self::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
         Ok(seg)
     }
-    fn codepoint(_payload: &Self::Payload) -> Self::CodepointType {
-        CODEPOINT
+    fn codepoint(&self) -> Self::CodepointType {
+        Self::CODEPOINT
     }
-    fn name() -> String {
+    fn kind(&self) -> String {
         String::from("UDP")
     }
 }
