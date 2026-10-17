@@ -5,6 +5,8 @@ use crate::net::com::{
 };
 use core::fmt;
 
+pub const CODEPOINT: u8 = 0x11;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
     pub src_port: u16,
@@ -16,16 +18,14 @@ pub struct Segment {
 }
 
 impl Segment {
-    pub const CODEPOINT: u8 = 0x11;
-
     pub fn new(
         src_sock_addr: SockAddr,
         dest_sock_addr: SockAddr,
         payload: Vec<u8>,
     ) -> Result<Self, SegmentError> {
         Ok(Self {
-            src_port: src_sock_addr.port(),
-            dest_port: dest_sock_addr.port(),
+            src_port: src_sock_addr.port().port_number(),
+            dest_port: dest_sock_addr.port().port_number(),
             // UDP Header as no variable-size fields, it's always 8 bytes
             len: 8 + payload.len() as u16,
             checksum: 0,
@@ -86,18 +86,15 @@ impl PduPayload for Segment {
         Ok(vec)
     }
 
-    fn deserialize(
-        cp: Self::CodepointType,
-        payload: &[u8],
-    ) -> Result<Self, Self::ErrorSpace> {
-        if cp != Self::CODEPOINT {
+    fn deserialize(cp: Self::CodepointType, payload: &[u8]) -> Result<Self, Self::ErrorSpace> {
+        if cp != CODEPOINT {
             return Err(SegmentError::ProtocolMismatch);
         }
         let seg = Self::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
         Ok(seg)
     }
     fn codepoint(&self) -> Self::CodepointType {
-        Self::CODEPOINT
+        CODEPOINT
     }
     fn kind(&self) -> String {
         String::from("UDP")
@@ -131,7 +128,7 @@ impl TryFrom<&[u8]> for Segment {
             dest_port: u16::from_be_bytes([buffer[2], buffer[3]]),
             len: seg_len,
             checksum: u16::from_be_bytes([buffer[6], buffer[7]]),
-            payload: buffer[seg_len as usize..].to_vec(),
+            payload: buffer[7..].to_vec(),
         };
 
         Ok(segment)
@@ -144,7 +141,7 @@ impl fmt::Display for Segment {
         write!(f, "\nDestination Port: {}", self.dest_port)?;
         write!(f, "\nSegment Length: {} bytes", self.len)?;
         write!(f, "\nChecksum: {:X}", self.checksum)?;
-        // write!(f, "\nPayload: {:X?}", self.payload)?;
+        write!(f, "\nPayload: {:X?}", self.payload)?;
 
         Ok(())
     }
