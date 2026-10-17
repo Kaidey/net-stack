@@ -7,11 +7,13 @@
 
 use std::fmt;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageError {
     InvalidRecordClass,
     InvalidRecordType,
     UnexpectedQuestionCount,
     PayloadParsingFailed,
+    InvalidName,
     Placeholder,
 }
 
@@ -217,13 +219,12 @@ pub struct Record {
 }
 
 impl Record {
-    // Assumes buffer is the headerless message
     pub fn parse(buffer: &[u8], rr_start: usize) -> Result<Self, RecordError> {
         // first byte of the record is the first byte of the name field
         let name_field =
             Name::parse(buffer, rr_start).map_err(|_| RecordError::RecordParsingFailed)?;
 
-        let name_end = name_field.wire_len();
+        let name_end = name_field.field_len;
 
         let rtype_bytes = u16::from_be_bytes([buffer[name_end], buffer[name_end + 1]]);
         let rtype = Type(rtype_bytes);
@@ -255,13 +256,33 @@ impl Record {
     pub fn wire_len(&self) -> usize {
         let mut len = 0;
 
-        len += self.name.wire_len();
+        len += self.name.field_len;
         len += self.rtype.wire_len();
         len += self.class.wire_len();
         len += 6; // ttl -> u32 -> 4 bytes + rdlen -> u16 -> 2 bytes
         len += self.rdata.len();
 
         len
+    }
+}
+
+impl TryFrom<&Record> for Vec<u8> {
+    type Error = RecordError;
+
+    fn try_from(record: &Record) -> Result<Self, Self::Error> {
+        let mut bytes: Vec<u8> = Vec::new();
+
+        let (name_bytes, _) =
+            Name::serialize(&record.name.parsed).map_err(|_| RecordError::RecordParsingFailed)?;
+
+        bytes.extend_from_slice(&name_bytes);
+        bytes.extend_from_slice(&record.rtype.bits().to_be_bytes());
+        bytes.extend_from_slice(&record.class.bits().to_be_bytes());
+        bytes.extend_from_slice(&record.ttl.to_be_bytes());
+        bytes.extend_from_slice(&record.rdlen.to_be_bytes());
+        bytes.extend_from_slice(&record.rdata);
+
+        Ok(bytes)
     }
 }
 
@@ -279,9 +300,12 @@ impl fmt::Display for Record {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NameError {
+pub enum NameError {
     UnknownControlByte,
     NameParseFailed,
+    InvalidLabel,
+    NameTooLong,
+    Truncated,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,7 +313,7 @@ enum NameControlByte {
     // Contains the number of bytes for this label
     LabelLen(u8),
     // Contains the pointer offset, which is relative to the start of the Message (1st header byte)
-    Pointer(u16),
+    Pointer(u8),
     End,
 }
 
@@ -316,8 +340,8 @@ impl TryFrom<u8> for NameControlByte {
                 // Here we only prepare the offset u16 with the first 6 bits (the lowest of the
                 // control byte)
                 //
-                // ((xxxx xxxx & 0011 1111) as u16) << 8 => (00xx xxxx as u16) << 8 => 0000 0000 00xx xxxx << 8 => 00xx xxxx 0000 0000
-                let ptr_offset = ((val & 0x3F) as u16) << 8;
+                // xxxx xxxx & 0011 1111 => 00xx xxxx
+                let ptr_offset = val & 0x3F;
 
                 Ok(Self::Pointer(ptr_offset))
             }
@@ -327,78 +351,112 @@ impl TryFrom<u8> for NameControlByte {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// This struct representes the whole name field, including control bytes (pointer/label len)
+// This struct representes the whole name field, including control bytes (pointer/label len/0-length
+// byte)
 pub struct Name {
     parsed: String,
-    // This is not a list of all label bytes that make up the parsed name, but how many label bytes are in
-    // the name field. Some of them could be in different places in the buffer, point to by
-    // pointer control bytes in the field
-    label_bytes: Vec<u8>,
-    ctrl_bytes: Vec<NameControlByte>,
+    field_len: usize,
 }
 
 impl Name {
-    // Assumes buffer is the headerless messsage
     pub fn parse(buffer: &[u8], name_start: usize) -> Result<Self, NameError> {
         let mut name_end = false;
-        let mut is_label_in_field = true;
 
-        let mut label_bytes_in_field = Vec::new();
-        let mut all_label_bytes = Vec::new();
-        let mut ctrl_bytes = Vec::new();
+        let mut buf_cursor_pos = name_start;
+        let mut jumped = false;
 
-        let mut next_ctrl_byte_idx = name_start;
+        let mut parsed_name = String::new();
+        let mut field_len: usize = 0;
 
         while !name_end {
-            let ctrl_byte = NameControlByte::try_from(buffer[next_ctrl_byte_idx])
-                .map_err(|_| NameError::NameParseFailed)?;
+            let byte = *buffer.get(buf_cursor_pos).ok_or(NameError::Truncated)?;
 
-            ctrl_bytes.push(ctrl_byte.clone());
-
-            match ctrl_byte {
+            match NameControlByte::try_from(byte).map_err(|_| NameError::NameParseFailed)? {
                 NameControlByte::LabelLen(len) => {
-                    let label_end = len as usize + 1;
+                    let label_start = buf_cursor_pos + 1;
+                    let label_end = label_start + len as usize;
 
-                    if is_label_in_field {
-                        label_bytes_in_field.extend_from_slice(&buffer[1..label_end]);
+                    let label_bytes = buffer
+                        .get(label_start..label_end)
+                        // Buffer is truncated and ends before all label bytes are read
+                        .ok_or(NameError::Truncated)?;
+
+                    let label =
+                        std::str::from_utf8(label_bytes).map_err(|_| NameError::NameParseFailed)?;
+
+                    parsed_name.push_str(label);
+                    parsed_name.push('.');
+
+                    if parsed_name.len() > 254 {
+                        return Err(NameError::NameTooLong);
                     }
-                    all_label_bytes.extend_from_slice(&buffer[1..label_end]);
 
-                    next_ctrl_byte_idx = label_end + 1;
+                    // The root name field ends whenever a pointer is reached, which replaces the
+                    // 0-length byte
+                    if !jumped {
+                        field_len += len as usize + 1; // label + its control byte
+                    }
+
+                    buf_cursor_pos = label_end;
                 }
-                NameControlByte::Pointer(offset_6_bits) => {
-                    // Points at a Label length byte
+                NameControlByte::Pointer(offset_high_bits) => {
+                    // Points to the start of a ctrl byte
                     // offset_6_bits    => 00xx xxxx 0000 0000
                     // buffer[1] as u16 => 0000 0000 xxxx xxxx
-                    let offset = offset_6_bits | buffer[1] as u16;
+                    let low_bits = *buffer.get(buf_cursor_pos + 1).ok_or(NameError::Truncated)?;
 
-                    // Offset is calculated from the first byte of the Message header
-                    next_ctrl_byte_idx = offset as usize - Message::HEADER_LEN;
-
-                    if is_label_in_field {
-                        is_label_in_field = false;
+                    if !jumped {
+                        field_len += 2; // the field ends after these 2 bytes
+                        jumped = true;
                     }
+
+                    // (xxxx xxxx as u16) << 8 | 0000 0000 yyyy yyyy =>
+                    // 0000 0000 xxxx xxxx << 8 | 0000 0000 yyyy yyyy =>
+                    // xxxx xxxx 0000 0000 | 0000 0000 yyyy yyyy => xxxx xxxx yyyy yyyy
+                    buf_cursor_pos = ((offset_high_bits as u16) << 8 | low_bits as u16) as usize;
                 }
-                NameControlByte::End => name_end = true,
+                NameControlByte::End => {
+                    if !jumped {
+                        field_len += 1;
+                    }
+                    name_end = true;
+                }
             }
         }
 
-        let full_parsed_name =
-            String::from_utf8(all_label_bytes).map_err(|_| NameError::NameParseFailed)?;
+        if parsed_name.len() > 255 {
+            return Err(NameError::NameTooLong);
+        }
 
-        Ok(Name {
-            parsed: full_parsed_name,
-            label_bytes: label_bytes_in_field,
-            ctrl_bytes: ctrl_bytes,
-        })
+        let name_field = Name {
+            parsed: parsed_name,
+            field_len: field_len as usize,
+        };
+
+        Ok(name_field)
     }
 
-    // This returns the length of a name field, not the length of the name that it represents, since
-    // some labels could be referenced by a pointer in the field itself
-    pub fn wire_len(&self) -> usize {
-        // NameControlByte::End which represents the 0-length byte that ends the name field is
-        // included in ctrl_bytes
-        self.label_bytes.len() + self.ctrl_bytes.len()
+    pub fn serialize(name: &str) -> Result<(Vec<u8>, usize), NameError> {
+        if name.len() > 255 {
+            return Err(NameError::NameTooLong);
+        }
+
+        let name = name.strip_suffix('.').unwrap_or(name);
+
+        let mut bytes = Vec::new();
+
+        for label in name.split('.') {
+            if label.is_empty() || label.len() > 63 {
+                return Err(NameError::InvalidLabel);
+            }
+            bytes.push(label.len() as u8);
+            bytes.extend_from_slice(label.as_bytes());
+        }
+        bytes.push(0); // 0-length byte that ends the name field
+
+        let field_len = bytes.len();
+
+        Ok((bytes, field_len))
     }
 }
 
@@ -421,17 +479,17 @@ pub struct Question {
 
 impl Question {
     fn wire_len(&self) -> usize {
-        self.qname.wire_len() + self.qtype.wire_len() + self.qclass.wire_len()
+        self.qname.field_len + self.qtype.wire_len() + self.qclass.wire_len()
     }
 }
 
 impl TryFrom<&[u8]> for Question {
     type Error = MessageError;
     fn try_from(buffer: &[u8]) -> Result<Self, Self::Error> {
-        // buffer is the headerless message, so the first byte is the first question byte
-        let qname = Name::parse(&buffer, 0).map_err(|_| MessageError::Placeholder)?;
+        let qname =
+            Name::parse(&buffer, Message::HEADER_LEN).map_err(|_| MessageError::Placeholder)?;
 
-        let name_end = qname.wire_len();
+        let name_end = Message::HEADER_LEN + qname.field_len;
 
         let qtype_bytes = u16::from_be_bytes([buffer[name_end], buffer[name_end + 1]]);
         let qtype = Type(qtype_bytes);
@@ -447,9 +505,32 @@ impl TryFrom<&[u8]> for Question {
     }
 }
 
+impl TryFrom<&Question> for Vec<u8> {
+    type Error = MessageError;
+    fn try_from(q: &Question) -> Result<Self, Self::Error> {
+        let mut bytes = Vec::new();
+
+        let (name_field_bytes, _) =
+            Name::serialize(&q.qname.parsed).map_err(|_| MessageError::PayloadParsingFailed)?;
+
+        bytes.extend_from_slice(&name_field_bytes);
+        bytes.extend_from_slice(&q.qtype.bits().to_be_bytes());
+        bytes.extend_from_slice(&q.qclass.bits().to_be_bytes());
+
+        Ok(bytes)
+    }
+}
+
 impl fmt::Display for Question {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "\nQName: {}", self.qname.parsed)?;
+        write!(
+            f,
+            "\nQName: {}",
+            self.qname
+                .parsed
+                .strip_suffix(".")
+                .unwrap_or(&self.qname.parsed)
+        )?;
         write!(f, "\nQType: {}", self.qtype)?;
         write!(f, "\nQClass: {}", self.qclass)?;
 
@@ -513,6 +594,43 @@ impl DnsPayload {
     }
 }
 
+impl TryFrom<&DnsPayload> for Vec<u8> {
+    type Error = MessageError;
+
+    fn try_from(p: &DnsPayload) -> Result<Self, Self::Error> {
+        let mut bytes = Vec::new();
+
+        let question: Vec<u8> =
+            Vec::<u8>::try_from(&p.question).map_err(|_| MessageError::PayloadParsingFailed)?;
+        let mut ans_wire: Vec<u8> = Vec::new();
+        let mut auth_wire: Vec<u8> = Vec::new();
+        let mut add_wire: Vec<u8> = Vec::new();
+
+        for an_r in &p.answer {
+            let rec_bytes =
+                Vec::<u8>::try_from(an_r).map_err(|_| MessageError::PayloadParsingFailed)?;
+            ans_wire.extend_from_slice(&rec_bytes);
+        }
+        for ns_r in &p.authority {
+            let rec_bytes =
+                Vec::<u8>::try_from(ns_r).map_err(|_| MessageError::PayloadParsingFailed)?;
+            auth_wire.extend_from_slice(&rec_bytes);
+        }
+        for ar_r in &p.additional {
+            let rec_bytes =
+                Vec::<u8>::try_from(ar_r).map_err(|_| MessageError::PayloadParsingFailed)?;
+            add_wire.extend_from_slice(&rec_bytes);
+        }
+
+        bytes.extend_from_slice(&question);
+        bytes.extend_from_slice(&ans_wire);
+        bytes.extend_from_slice(&auth_wire);
+        bytes.extend_from_slice(&add_wire);
+
+        Ok(bytes)
+    }
+}
+
 impl fmt::Display for DnsPayload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "\nQuestion: {}", self.question)?;
@@ -525,13 +643,12 @@ impl fmt::Display for DnsPayload {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Flags {
-    is_query: bool,
+    is_response: bool,
     opcode: OpCode,
     is_auth_answer: bool,
     is_truncated: bool,
     is_recurse_desired: bool,
     is_recurse_available: bool,
-    zero: u8,
     rcode: ResponseCode,
 }
 
@@ -540,19 +657,18 @@ impl From<u16> for Flags {
         Self {
             // QR -> msb => val & 1000 0000 0000 0000 = 0x8000
             // if val == 1000 0000 0000 0000, then val & 0x8000 = 1000 0000 0000 0000
-            is_query: buffer & 0x8000 == 0x8000,
+            is_response: buffer & 0x8000 == 0x8000,
             // Opcode -> msb + 1 - msb + 4 => val & 0111 1000 0000 0000 = 0x7800
             // 0xxx x000 0000 0000 >> 11 => 0000 0000 0000 xxxx => as u8 => 0000 xxxx
             opcode: OpCode::extract_bits(((buffer & 0x7800) >> 11) as u8),
             // AA -> msb + 5 => val & 0000 0100 0000 0000 => 0x0400
-            is_auth_answer: buffer & 0x4000 == 0x04000,
+            is_auth_answer: buffer & 0x4000 == 0x4000,
             // TC -> msb + 6 => val & 0000 0010 0000 0000 => 0x0200
             is_truncated: buffer & 0x0200 == 0x0200,
             // RD -> msb + 7 => val & 0000 0001 0000 0000 => 0x0100
             is_recurse_desired: buffer & 0x0100 == 0x0100,
             // RA -> msb + 8 => val & 0000 0000 1000 0000 => 0x0080
             is_recurse_available: buffer & 0x0080 == 0x0080,
-            zero: 0,
             // Rcode -> msb + 9 - msb + 12 => val & 0000 0000 0000 1111 => 0x000F
             // 0000 0000 0000 xxxx => as u8 => xxxx
             rcode: ResponseCode::extract_bits((buffer & 0x000F) as u8),
@@ -562,16 +678,15 @@ impl From<u16> for Flags {
 
 impl From<&Flags> for u16 {
     fn from(value: &Flags) -> Self {
-        let mut bytes = u16::from(0 as u16);
+        let mut bytes = 0u16;
 
-        bytes &= (value.is_query as u16) << 15; // x000 0000 0000 0000
-        bytes &= (value.opcode.bits() as u16) << 11; // 0xxx x000 0000 0000
-        bytes &= (value.is_auth_answer as u16) << 10; // 0000 0x00 0000 0000
-        bytes &= (value.is_truncated as u16) << 9; // 0000 00x0 0000 0000
-        bytes &= (value.is_recurse_desired as u16) << 8; // 0000 000x 0000 0000
-        bytes &= (value.is_recurse_available as u16) << 7; // 0000 0000 x000 0000
-        bytes &= (value.zero as u16) << 4; // 0000 0000 0xxx 0000
-        bytes &= value.rcode.bits() as u16; // 0000 0000 0000 xxxx
+        bytes |= (value.is_response as u16) << 15; //  x000 0000 0000 0000
+        bytes |= (value.opcode.bits() as u16) << 11; // 0xxx x000 0000 0000
+        bytes |= (value.is_auth_answer as u16) << 10; // 0000 0x00 0000 0000
+        bytes |= (value.is_truncated as u16) << 9; // 0000 00x0 0000 0000
+        bytes |= (value.is_recurse_desired as u16) << 8; // 0000 000x 0000 0000
+        bytes |= (value.is_recurse_available as u16) << 7; // 0000 0000 x000 0000
+        bytes |= value.rcode.bits() as u16; // 0000 0000 0000 xxxx
 
         bytes
     }
@@ -579,13 +694,13 @@ impl From<&Flags> for u16 {
 
 impl fmt::Display for Flags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "\nQuery: {}", self.is_query)?;
-        write!(f, "{}", self.opcode)?;
-        write!(f, "\nAuthoritative Answer: {}", self.is_auth_answer)?;
-        write!(f, "\nTruncated: {}", self.is_truncated)?;
-        write!(f, "\nRecurse Desired: {}", self.is_recurse_desired)?;
-        write!(f, "\nRecurse Available: {}", self.is_recurse_available)?;
-        write!(f, "{}", self.rcode)?;
+        write!(f, "\nIs Response: {}", self.is_response)?;
+        write!(f, "\nOpCode: {}", self.opcode)?;
+        write!(f, "\nIs Authoritative Answer: {}", self.is_auth_answer)?;
+        write!(f, "\nIs Truncated: {}", self.is_truncated)?;
+        write!(f, "\nIs Recurse Desired: {}", self.is_recurse_desired)?;
+        write!(f, "\nIs Recurse Available: {}", self.is_recurse_available)?;
+        write!(f, "\nResponse Code: {}", self.rcode)?;
 
         Ok(())
     }
@@ -606,6 +721,56 @@ pub struct Message {
 impl Message {
     // In bytes
     const HEADER_LEN: usize = 12;
+
+    pub fn new(name: &str) -> Result<Self, MessageError> {
+        // TODO: The usage of serialize() makes no sense. Rethink the Name type
+        let (_, field_len) = Name::serialize(name).map_err(|_| MessageError::InvalidName)?;
+        let name_field = Name {
+            parsed: String::from(name),
+            field_len: field_len,
+        };
+
+        let flags = Flags {
+            is_response: false,
+            opcode: OpCode::QUERY,
+            is_auth_answer: false,
+            is_truncated: false,
+            is_recurse_desired: true,
+            is_recurse_available: false,
+            rcode: ResponseCode::NO_ERROR,
+        };
+
+        let question = Question {
+            qname: name_field,
+            qtype: Type::A,
+            qclass: Class::IN,
+        };
+
+        let payload = DnsPayload {
+            question: question,
+            answer: vec![],
+            authority: vec![],
+            additional: vec![],
+        };
+
+        let mut buf: [u8; 2] = [0, 0];
+
+        let res: isize = unsafe { libc::getrandom(buf.as_mut_ptr() as _, buf.len(), 0) };
+
+        if res != buf.len() as isize {
+            return Err(MessageError::Placeholder);
+        }
+
+        Ok(Self {
+            id: u16::from_ne_bytes(buf),
+            flags: flags,
+            qd_count: 1,
+            an_count: 0,
+            ns_count: 0,
+            ar_count: 0,
+            payload: payload,
+        })
+    }
 }
 
 impl TryFrom<&[u8]> for Message {
@@ -630,7 +795,7 @@ impl TryFrom<&[u8]> for Message {
         // Parse payload
         // Payload parsing requires the entire headerless message due to name label pointers
         let payload = DnsPayload::parse(
-            &buffer[Message::HEADER_LEN..],
+            &buffer,
             ancount as usize,
             nscount as usize,
             arcount as usize,
@@ -652,8 +817,18 @@ impl TryFrom<&Message> for Vec<u8> {
     type Error = MessageError;
 
     fn try_from(msg: &Message) -> Result<Self, Self::Error> {
+        let mut bytes: Vec<u8> = Vec::new();
 
-        let message = MessageError::try_from(msg)
+        let serialized_payload =
+            Vec::<u8>::try_from(&msg.payload).map_err(|_| MessageError::PayloadParsingFailed)?;
+
+        bytes.extend_from_slice(&msg.id.to_be_bytes());
+        bytes.extend_from_slice(&u16::from(&msg.flags).to_be_bytes());
+        bytes.extend_from_slice(&msg.qd_count.to_be_bytes());
+        bytes.extend_from_slice(&msg.an_count.to_be_bytes());
+        bytes.extend_from_slice(&msg.ns_count.to_be_bytes());
+        bytes.extend_from_slice(&msg.ar_count.to_be_bytes());
+        bytes.extend_from_slice(&serialized_payload);
 
         Ok(bytes)
     }
