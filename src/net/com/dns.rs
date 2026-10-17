@@ -237,7 +237,7 @@ impl Record {
         let name_field =
             Name::parse(buffer, rr_start).map_err(|_| RecordError::RecordParsingFailed)?;
 
-        let name_end = name_field.field_len;
+        let name_end = rr_start + name_field.field_len;
 
         let rtype_bytes = u16::from_be_bytes([buffer[name_end], buffer[name_end + 1]]);
         let rtype = Type(rtype_bytes);
@@ -649,7 +649,9 @@ impl TryFrom<&DnsPayload> for Vec<u8> {
 impl fmt::Display for DnsPayload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "\nQuestion: {}", self.question)?;
-        write!(f, "\nAnswer: {:?}", self.answer)?;
+        for a in self.answer.clone() {
+            write!(f, "\nAnswer: {}", a)?;
+        }
         write!(f, "\nAuthority: {:?}", self.authority)?;
         write!(f, "\nAdditional: {:?}", self.additional)?;
         Ok(())
