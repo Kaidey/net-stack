@@ -47,14 +47,14 @@ impl fmt::Display for UnknownPayload {
 pub struct Frame<P: PduPayload<CodepointType = u16>> {
     dest_mac_address: MacAddress,
     src_mac_address: MacAddress,
-    pub payload: P::Payload,
+    pub payload: P,
 }
 
 impl<P: PduPayload<CodepointType = u16>> Frame<P> {
     pub fn new(
         dest_mac_address: MacAddress,
         src_mac_address: MacAddress,
-        payload: P::Payload,
+        payload: P,
     ) -> Self {
         Self {
             dest_mac_address: dest_mac_address,

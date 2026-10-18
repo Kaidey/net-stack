@@ -1,22 +1,25 @@
 use libc;
 use std::{
-    error::Error,
-    fs,
-    io::{self, Read},
-    ptr,
+    error::Error, fs, io::{self, Read}, ptr, str::FromStr,
 };
 
 pub struct ItfAddrs {
+    itf_name: String,
     ipv4: Option<[u8; 4]>,
     ipv6: Option<[u8; 16]>,
 }
 
 impl ItfAddrs {
-    pub fn new() -> Self {
+    pub fn new(itf_anme: &str) -> Self {
         Self {
+            itf_name: String::from_str(itf_anme).unwrap(),
             ipv4: None,
             ipv6: None,
         }
+    }
+
+    pub fn get_itf_name(&self) -> &str{
+        &self.itf_name
     }
 
     pub fn set_ipv4(&mut self, addr: [u8; 4]) {
@@ -190,7 +193,7 @@ pub fn get_itf_mac_addr(target_itf_name: &str) -> Result<Option<String>, io::Err
 pub fn get_itf_addrs(target_itf_name: &str) -> Result<ItfAddrs, io::Error> {
     let current_os = std::env::consts::OS;
 
-    let mut itf_addrs = ItfAddrs::new();
+    let mut itf_addrs = ItfAddrs::new(target_itf_name);
 
     if current_os == "linux" {
         unsafe {

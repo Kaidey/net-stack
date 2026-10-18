@@ -266,6 +266,9 @@ impl Record {
         })
     }
 
+    pub fn get_record_data(&self) -> Vec<u8> {
+        self.rdata.clone()
+    }
     pub fn wire_len(&self) -> usize {
         let mut len = 0;
 
@@ -301,13 +304,19 @@ impl TryFrom<&Record> for Vec<u8> {
 
 impl fmt::Display for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "\nName: {}", self.name)?;
+        write!(
+            f,
+            "\nName: {}",
+            self.name
+                .parsed
+                .strip_suffix(".")
+                .unwrap_or(&self.name.parsed)
+        )?;
         write!(f, "\nRecord Type: {}", self.rtype)?;
         write!(f, "\nRecord Class: {}", self.class)?;
         write!(f, "\nTtl: {}", self.ttl)?;
         write!(f, "\nData Length: {}", self.rdlen)?;
-        // TODO: How to represent record data?
-        // write!(f, "\nData: {}", self.rdata)?;
+        write!(f, "\nData: {:02X?}", self.rdata)?;
         Ok(())
     }
 }
@@ -558,7 +567,7 @@ pub struct DnsPayload {
     // [RFC-9619 Section 4] Question section of a DNS message with OPCODE = 0 MUST NOT contain more than one question
     question: Question,
     // Following three fields can be empty lists
-    answer: Vec<Record>,
+    pub answer: Vec<Record>,
     authority: Vec<Record>,
     additional: Vec<Record>,
 }
@@ -732,7 +741,7 @@ pub struct Message {
     an_count: u16,
     ns_count: u16,
     ar_count: u16,
-    payload: DnsPayload,
+    pub payload: DnsPayload,
 }
 
 impl Message {

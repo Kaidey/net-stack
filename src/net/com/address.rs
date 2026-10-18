@@ -1,4 +1,95 @@
+use crate::net::socket;
+use crate::os;
 use std::fmt;
+
+pub enum PortGuardError {
+    Placeholder,
+}
+
+// Holds the fd of a reservation socket and the reserved port number
+// The socket needs to remain in scope for the port it was assigned to stay reserved for our process.
+// Reservation sockets allow us to either request a free port from the kernel or guarantee that a
+// client provided port is free
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortGuard {
+    sock_fd: Option<i32>,
+    port: u16,
+    is_tcp: bool,
+}
+
+// TODO: Review usage of PortGuard for ports with reservation socket and ports without
+impl PortGuard {
+    pub fn new(
+        request_port: u16,
+        is_tcp_port: bool,
+        use_reservation_socket: bool,
+    ) -> Result<Self, PortGuardError> {
+        if !use_reservation_socket {
+            return Ok(PortGuard {
+                sock_fd: None,
+                port: request_port,
+                is_tcp: is_tcp_port,
+            });
+        } else {
+            let (fd, port) = socket::new_reservation_sock(request_port)
+                .map_err(|_| PortGuardError::Placeholder)?;
+
+            let mut pg = Self {
+                sock_fd: Some(fd),
+                port: port,
+                is_tcp: is_tcp_port,
+            };
+
+            if is_tcp_port {
+                match os::switch_iptables_kernel_rst_block(port, os::IpTableRuleAction::Insert) {
+                    Ok(true) => {
+                        pg.is_tcp = true;
+                        return Ok(pg);
+                    }
+                    _ => {
+                        unsafe {
+                            libc::close(fd);
+                        }
+                        return Err(PortGuardError::Placeholder);
+                    }
+                }
+            } else {
+                return Ok(pg);
+            }
+        }
+    }
+
+    pub fn port_number(&self) -> u16 {
+        self.port
+    }
+}
+
+// Implements behaviour for when a value is dropped (goes out of scope)
+// E.g: if an object holding a PortGuard type is dropped
+impl Drop for PortGuard {
+    fn drop(&mut self) {
+        if self.is_tcp {
+            match os::switch_iptables_kernel_rst_block(self.port, os::IpTableRuleAction::Delete) {
+                Ok(true) => {
+                    println!("Kernel-rst-block drop rule deleted successfully from iptables")
+                }
+                Ok(false) => eprintln!(
+                    "warning: deleting kernel-rst-block drop rule for port {} failed",
+                    self.port
+                ),
+                Err(e) => eprintln!(
+                    "warning: deleting kernel-rst-block drop rule failed, could not run iptables: {e}"
+                ),
+            }
+        }
+        // If this PortGuard uses a reservation socket
+        if let Some(sock) = self.sock_fd {
+            unsafe {
+                libc::close(sock);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddressError {
@@ -279,7 +370,7 @@ impl fmt::Display for IPv4Address {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IPv6Address([u8; 16]);
+pub struct IPv6Address(pub [u8; 16]);
 
 impl IPv6Address {
     // TODO
@@ -313,33 +404,33 @@ impl IpAddr {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SockAddrV4(pub IPv4Address, pub u16);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SockAddrV4(pub IPv4Address, pub PortGuard);
 
 impl SockAddrV4 {
     pub fn addr(&self) -> IPv4Address {
         self.0
     }
 
-    pub fn port(&self) -> u16 {
-        self.1
+    pub fn port(&self) -> PortGuard {
+        self.1.clone()
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SockAddrV6(pub IPv6Address, pub u16);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SockAddrV6(pub IPv6Address, pub PortGuard);
 
 impl SockAddrV6 {
     pub fn addr(&self) -> IPv6Address {
         self.0
     }
 
-    pub fn port(&self) -> u16 {
-        self.1
+    pub fn port(&self) -> PortGuard {
+        self.1.clone()
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SockAddr {
     V4(SockAddrV4),
     V6(SockAddrV6),
@@ -353,7 +444,7 @@ impl SockAddr {
         }
     }
 
-    pub fn port(&self) -> u16 {
+    pub fn port(&self) -> PortGuard {
         match self {
             Self::V4(addr) => addr.port(),
             Self::V6(addr) => addr.port(),
@@ -400,11 +491,11 @@ impl TryFrom<&SockAddr> for SockAddrV6 {
 }
 
 pub trait ToSockAddr {
-    fn to_sock_addr(&self) -> Result<SockAddr, AddressError>;
+    fn to_sock_addr(&self, is_tcp: bool) -> Result<SockAddr, AddressError>;
 }
 
 impl ToSockAddr for &str {
-    fn to_sock_addr(&self) -> Result<SockAddr, AddressError> {
+    fn to_sock_addr(&self, is_tcp: bool) -> Result<SockAddr, AddressError> {
         // Handles direct ip:port strings
         // TODO: Handle host names with DNS
         // TODO: Handle IPv6
@@ -430,6 +521,12 @@ impl ToSockAddr for &str {
             dest_port = (dest_port as u16) * 10 + (d as u16);
         }
 
-        Ok(SockAddr::V4(SockAddrV4(dest_ip, dest_port)))
+        let pg = PortGuard {
+            sock_fd: None,
+            port: dest_port,
+            is_tcp: is_tcp,
+        };
+
+        Ok(SockAddr::V4(SockAddrV4(dest_ip, pg)))
     }
 }

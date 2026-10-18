@@ -128,7 +128,7 @@ impl TryFrom<&[u8]> for Segment {
             dest_port: u16::from_be_bytes([buffer[2], buffer[3]]),
             len: seg_len,
             checksum: u16::from_be_bytes([buffer[6], buffer[7]]),
-            payload: buffer[7..].to_vec(),
+            payload: buffer[8..].to_vec(),
         };
 
         Ok(segment)

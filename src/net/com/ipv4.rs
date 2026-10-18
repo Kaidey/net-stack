@@ -1,13 +1,10 @@
 use core::fmt;
 
-use crate::net::com::{
-    PduPayload,
-    address::{IPv4Address},
-     utils,
-};
+use crate::net::com::{PduPayload, address::IPv4Address, utils};
 
 // TODO: Review. This might be a problem for multi-thread
 static mut NEXT_ID: u16 = 0;
+pub const CODEPOINT: u16 = 0x0800;
 
 fn next_datagram_id() -> u16 {
     unsafe {
@@ -206,8 +203,6 @@ pub struct Datagram<P: PduPayload<CodepointType = u8>> {
 }
 
 impl<P: PduPayload<CodepointType = u8>> Datagram<P> {
-    pub const CODEPOINT: u16 = 0x0800;
-
     pub fn new(
         src_ip: IPv4Address,
         dest_ip: IPv4Address,
@@ -309,7 +304,7 @@ impl<P: PduPayload<CodepointType = u8>> PduPayload for Datagram<P> {
     }
 
     fn deserialize(cp: Self::CodepointType, payload: &[u8]) -> Result<Self, Self::ErrorSpace> {
-        if cp != Self::CODEPOINT {
+        if cp != CODEPOINT {
             return Err(DatagramError::ProtocolMismatch);
         }
         let datag =
@@ -319,7 +314,7 @@ impl<P: PduPayload<CodepointType = u8>> PduPayload for Datagram<P> {
     }
 
     fn codepoint(&self) -> Self::CodepointType {
-        Self::CODEPOINT
+        CODEPOINT
     }
     fn kind(&self) -> String {
         String::from("IPv4")
@@ -410,7 +405,7 @@ impl<P: PduPayload<CodepointType = u8>> fmt::Display for Datagram<P> {
             f,
             "\nNext Level Protocol: {:02X} ({})",
             self.payload.codepoint(),
-            self.kind()
+            self.payload.kind()
         )?;
         write!(f, "\nChecksum: {:04X}", self.checksum)?;
         write!(f, "\nSource Address: {}", self.src_ip)?;

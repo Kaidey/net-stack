@@ -12,6 +12,7 @@ use crate::net::com::{
 use crate::{crypto, net::com::PduPayload};
 
 pub struct Clock(Instant);
+pub const CODEPOINT: u8 = 0x06;
 
 impl Clock {
     pub fn new() -> Self {
@@ -152,8 +153,6 @@ pub struct Segment {
 }
 
 impl Segment {
-    pub const CODEPOINT: u8 = 0x06;
-
     pub fn new(
         src_sock_addr: SockAddr,
         dest_sock_addr: SockAddr,
@@ -163,8 +162,8 @@ impl Segment {
         let default_hlen = 20;
 
         Ok(Self {
-            src_port: src_sock_addr.port(),
-            dest_port: dest_sock_addr.port(),
+            src_port: src_sock_addr.port().port_number(),
+            dest_port: dest_sock_addr.port().port_number(),
             seq_num: 0,
             ack_num: 0,
             hlen: default_hlen,
@@ -177,9 +176,9 @@ impl Segment {
         }
         .gen_isn(
             &src_sock_addr.addr_bytes(),
-            &src_sock_addr.port().to_be_bytes(),
+            &src_sock_addr.port().port_number().to_be_bytes(),
             &dest_sock_addr.addr_bytes(),
-            &dest_sock_addr.port().to_be_bytes(),
+            &dest_sock_addr.port().port_number().to_be_bytes(),
             crypto::SECRET.bytes(),
         ))
     }
@@ -291,14 +290,14 @@ impl PduPayload for Segment {
     }
 
     fn deserialize(cp: Self::CodepointType, payload: &[u8]) -> Result<Self, Self::ErrorSpace> {
-        if cp != Self::CODEPOINT {
+        if cp != CODEPOINT {
             return Err(SegmentError::ProtocolMismatch);
         }
         let seg = Self::try_from(payload).or_else(|_| Err(SegmentError::InvalidTcpSegment))?;
         Ok(seg)
     }
     fn codepoint(&self) -> Self::CodepointType {
-        Self::CODEPOINT
+        CODEPOINT
     }
     fn kind(&self) -> String {
         String::from("TCP")

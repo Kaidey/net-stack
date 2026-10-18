@@ -1,4 +1,4 @@
-use crate::net::com::{ethernet, ipv4, udp};
+use crate::net::{com::{address::IPv4Address, ethernet, ipv4, udp}, resolve_domain_name};
 
 mod crypto;
 mod net;
@@ -16,26 +16,15 @@ mod os;
 // HTTP Client
 
 fn main() {
-    let msg = net::com::dns::Message::new("www.google.com").unwrap();
 
-    let udp = udp::Segment::new(src_sock_addr, dest_sock_addr, Vec::<u8>::try_from(&msg).unwrap()).unwrap();
+    let name = "scanme.nmap.org";
 
-    let ip = ipv4::Datagram::new(src_ip, dest_ip, udp).unwrap();
+    println!("Resolving Host Name '{}'\n", name);
 
-    let frame = ethernet::Frame::<ipv4::Datagram<udp::Segment>>::new(dest_mac_address, src_mac_address, ip);
+    let res = resolve_domain_name(name).unwrap();
+    let ip = IPv4Address::try_from(res.as_slice()).unwrap();
 
-    let recv_frame = ethernet::Frame::try_from(buffer).unwrap();
-
-    let ip_payload = recv_frame.payload;
-
-    let udp_paylod = ip_payload.payload;
-
-    let dns_resp = udp_paylod.payload;
-
-    if dns_resp.id == msg.id{
-        // Parse mesage
-    }
-
+    println!("\nDNS Reply: {}", ip);
 
 
     // let new_conn = net::TcpConnection::new("45.33.32.156:80", None).unwrap();
