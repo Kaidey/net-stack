@@ -162,8 +162,8 @@ impl Segment {
         let default_hlen = 20;
 
         Ok(Self {
-            src_port: src_sock_addr.port().port_number(),
-            dest_port: dest_sock_addr.port().port_number(),
+            src_port: src_sock_addr.port().number(),
+            dest_port: dest_sock_addr.port().number(),
             seq_num: 0,
             ack_num: 0,
             hlen: default_hlen,
@@ -176,9 +176,9 @@ impl Segment {
         }
         .gen_isn(
             &src_sock_addr.addr_bytes(),
-            &src_sock_addr.port().port_number().to_be_bytes(),
+            &src_sock_addr.port().number().to_be_bytes(),
             &dest_sock_addr.addr_bytes(),
-            &dest_sock_addr.port().port_number().to_be_bytes(),
+            &dest_sock_addr.port().number().to_be_bytes(),
             crypto::SECRET.bytes(),
         ))
     }

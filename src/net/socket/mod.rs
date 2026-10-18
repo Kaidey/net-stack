@@ -55,7 +55,7 @@ fn interface_bind_packet_socket(sock_fd: i32, net_itf: CString) {
     }
 }
 
-// Reserves a TCP port by creating a non-listening socket and binding it to the requested port
+// Reserves a port by creating a non-listening socket and binding it to the requested port
 // If requested == 0, the kernel picks an available port
 //
 // The socket needs to be closed manually if the process keeps running but it is no longer used. If

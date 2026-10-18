@@ -1,6 +1,9 @@
 use libc;
 use std::{
-    error::Error, fs, io::{self, Read}, ptr, str::FromStr,
+    fs,
+    io::{self, Read},
+    ptr,
+    str::FromStr,
 };
 
 pub struct ItfAddrs {
@@ -18,7 +21,7 @@ impl ItfAddrs {
         }
     }
 
-    pub fn get_itf_name(&self) -> &str{
+    pub fn get_itf_name(&self) -> &str {
         &self.itf_name
     }
 
@@ -30,11 +33,11 @@ impl ItfAddrs {
         self.ipv6 = Some(addr);
     }
 
-    pub fn get_ipv4(&self) -> Option<[u8;4]>{
+    pub fn get_ipv4(&self) -> Option<[u8; 4]> {
         self.ipv4
     }
 
-    pub fn get_ipv6(&self) -> Option<[u8;16]>{
+    pub fn get_ipv6(&self) -> Option<[u8; 16]> {
         self.ipv6
     }
 }
@@ -217,7 +220,7 @@ pub fn get_itf_addrs(target_itf_name: &str) -> Result<ItfAddrs, io::Error> {
                             libc::AF_INET => {
                                 let ip_sockaddr_ptr = next_addr.ifa_addr as *mut libc::sockaddr_in;
                                 // to_ne_bytes() is used here because s_addr is a u32 which we need to convert to a byte array
-                                // However, the u32 is already  stored in network byte order. Meaning the most significant byte 
+                                // However, the u32 is already  stored in network byte order. Meaning the most significant byte
                                 // of the address is stored as the msb of the in-memory byte sequence aka big-endian
                                 let addr_bytes = (*ip_sockaddr_ptr).sin_addr.s_addr.to_ne_bytes();
                                 itf_addrs.set_ipv4(addr_bytes)

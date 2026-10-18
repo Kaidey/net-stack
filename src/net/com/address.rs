@@ -1,6 +1,31 @@
-use crate::net::socket;
+use crate::net::{resolve_domain_name, socket};
 use crate::os;
 use std::fmt;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Port {
+    Reserved(PortGuard),
+    Unreserved(u16),
+}
+
+impl Port {
+    pub fn number(&self) -> u16 {
+        match self {
+            Self::Reserved(port_guard) => port_guard.port,
+            Self::Unreserved(port) => port.to_owned(),
+        }
+    }
+}
+
+impl fmt::Display for Port {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unreserved(port) => write!(f, "{}", port)?,
+            Self::Reserved(pg) => write!(f, "{}", pg.port_number())?,
+        }
+        Ok(())
+    }
+}
 
 pub enum PortGuardError {
     Placeholder,
@@ -12,50 +37,37 @@ pub enum PortGuardError {
 // client provided port is free
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortGuard {
-    sock_fd: Option<i32>,
-    port: u16,
+    pub sock_fd: i32,
+    pub port: u16,
     is_tcp: bool,
 }
 
-// TODO: Review usage of PortGuard for ports with reservation socket and ports without
 impl PortGuard {
-    pub fn new(
-        request_port: u16,
-        is_tcp_port: bool,
-        use_reservation_socket: bool,
-    ) -> Result<Self, PortGuardError> {
-        if !use_reservation_socket {
-            return Ok(PortGuard {
-                sock_fd: None,
-                port: request_port,
-                is_tcp: is_tcp_port,
-            });
-        } else {
-            let (fd, port) = socket::new_reservation_sock(request_port)
-                .map_err(|_| PortGuardError::Placeholder)?;
+    pub fn new(request_port: u16, is_tcp_port: bool) -> Result<Self, PortGuardError> {
+        let (fd, port) =
+            socket::new_reservation_sock(request_port).map_err(|_| PortGuardError::Placeholder)?;
 
-            let mut pg = Self {
-                sock_fd: Some(fd),
-                port: port,
-                is_tcp: is_tcp_port,
-            };
+        let mut pg = Self {
+            sock_fd: fd,
+            port: port,
+            is_tcp: is_tcp_port,
+        };
 
-            if is_tcp_port {
-                match os::switch_iptables_kernel_rst_block(port, os::IpTableRuleAction::Insert) {
-                    Ok(true) => {
-                        pg.is_tcp = true;
-                        return Ok(pg);
-                    }
-                    _ => {
-                        unsafe {
-                            libc::close(fd);
-                        }
-                        return Err(PortGuardError::Placeholder);
-                    }
+        if is_tcp_port {
+            match os::switch_iptables_kernel_rst_block(port, os::IpTableRuleAction::Insert) {
+                Ok(true) => {
+                    pg.is_tcp = true;
+                    return Ok(pg);
                 }
-            } else {
-                return Ok(pg);
+                _ => {
+                    unsafe {
+                        libc::close(fd);
+                    }
+                    return Err(PortGuardError::Placeholder);
+                }
             }
+        } else {
+            return Ok(pg);
         }
     }
 
@@ -64,6 +76,15 @@ impl PortGuard {
     }
 }
 
+impl TryFrom<&Port> for PortGuard {
+    type Error = PortGuardError;
+    fn try_from(value: &Port) -> Result<Self, Self::Error> {
+        match value {
+            Port::Reserved(pg) => Ok(pg.clone()),
+            Port::Unreserved(_) => Err(PortGuardError::Placeholder),
+        }
+    }
+}
 // Implements behaviour for when a value is dropped (goes out of scope)
 // E.g: if an object holding a PortGuard type is dropped
 impl Drop for PortGuard {
@@ -83,10 +104,8 @@ impl Drop for PortGuard {
             }
         }
         // If this PortGuard uses a reservation socket
-        if let Some(sock) = self.sock_fd {
-            unsafe {
-                libc::close(sock);
-            }
+        unsafe {
+            libc::close(self.sock_fd);
         }
     }
 }
@@ -100,6 +119,7 @@ pub enum AddressError {
     InvalidPort,
     NotImplemented,
     AddressFamilyMismatch,
+    CouldNotResolveHost,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,7 +263,7 @@ impl TryFrom<&str> for MacAddress {
     type Error = AddressError;
 
     fn try_from(str: &str) -> Result<Self, AddressError> {
-        let mut res: Result<Vec<u8>, AddressError> = Err(AddressError::ConvertionFailed);
+        let res: Option<Vec<u8>>;
 
         if str.len() == 0 || str.len() < MacAddress::LENGTH {
             return Err(AddressError::NotEnoughOctets);
@@ -262,25 +282,29 @@ impl TryFrom<&str> for MacAddress {
         // XX-XX-XX-XX-XX-XX or XX:XX:XX:XX:XX:XX
         if divider.is_empty() == false {
             let str_split = str_no_term_char.split(divider).collect::<Vec<&str>>();
-            res = (0..str_split.len())
-                .map(|i| {
-                    u8::from_str_radix(&str_split[i], 16)
-                        .map_err(|_| AddressError::ConvertionFailed)
-                })
-                .collect();
+            res = Some(
+                (0..str_split.len())
+                    .map(|i| {
+                        u8::from_str_radix(&str_split[i], 16)
+                            .map_err(|_| AddressError::ConvertionFailed)
+                    })
+                    .collect::<Result<Vec<u8>, AddressError>>()?,
+            );
         // XXXXXXXXXXXX
         } else {
-            res = (0..str_no_term_char.len())
-                .step_by(2)
-                .map(|i| {
-                    u8::from_str_radix(&str_no_term_char[i..i + 1], 16)
-                        .map_err(|_| AddressError::ConvertionFailed)
-                })
-                .collect();
+            res = Some(
+                (0..str_no_term_char.len())
+                    .step_by(2)
+                    .map(|i| {
+                        u8::from_str_radix(&str_no_term_char[i..i + 1], 16)
+                            .map_err(|_| AddressError::ConvertionFailed)
+                    })
+                    .collect::<Result<Vec<u8>, AddressError>>()?,
+            );
         }
 
         match res {
-            Ok(bytes) => {
+            Some(bytes) => {
                 if bytes.len() != 6 {
                     return Err(AddressError::NotEnoughOctets);
                 } else {
@@ -290,7 +314,7 @@ impl TryFrom<&str> for MacAddress {
                     return Ok(MacAddress(byte_array));
                 }
             }
-            Err(_) => return Err(AddressError::ConvertionFailed),
+            None => return Err(AddressError::ConvertionFailed),
         }
     }
 }
@@ -389,43 +413,28 @@ impl fmt::Display for IPv6Address {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IpAddr {
-    V4(IPv4Address),
-    V6(IPv6Address),
-}
-
-impl IpAddr {
-    pub fn addr_bytes(&self) -> &[u8] {
-        match self {
-            IpAddr::V4(addr) => addr.addr_bytes(),
-            IpAddr::V6(_addr) => &[0],
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SockAddrV4(pub IPv4Address, pub PortGuard);
+pub struct SockAddrV4(pub IPv4Address, pub Port);
 
 impl SockAddrV4 {
     pub fn addr(&self) -> IPv4Address {
         self.0
     }
 
-    pub fn port(&self) -> PortGuard {
+    pub fn port(&self) -> Port {
         self.1.clone()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SockAddrV6(pub IPv6Address, pub PortGuard);
+pub struct SockAddrV6(pub IPv6Address, pub Port);
 
 impl SockAddrV6 {
     pub fn addr(&self) -> IPv6Address {
         self.0
     }
 
-    pub fn port(&self) -> PortGuard {
+    pub fn port(&self) -> Port {
         self.1.clone()
     }
 }
@@ -444,7 +453,7 @@ impl SockAddr {
         }
     }
 
-    pub fn port(&self) -> PortGuard {
+    pub fn port(&self) -> Port {
         match self {
             Self::V4(addr) => addr.port(),
             Self::V6(addr) => addr.port(),
@@ -491,42 +500,103 @@ impl TryFrom<&SockAddr> for SockAddrV6 {
 }
 
 pub trait ToSockAddr {
-    fn to_sock_addr(&self, is_tcp: bool) -> Result<SockAddr, AddressError>;
+    fn to_sock_addr(&self) -> Result<SockAddr, AddressError>;
 }
 
 impl ToSockAddr for &str {
-    fn to_sock_addr(&self, is_tcp: bool) -> Result<SockAddr, AddressError> {
-        // Handles direct ip:port strings
-        // TODO: Handle host names with DNS
+    fn to_sock_addr(&self) -> Result<SockAddr, AddressError> {
         // TODO: Handle IPv6
-        let slices = self.split(":").collect::<Vec<&str>>();
 
-        if slices.len() != 2 || slices[1].is_empty() {
-            return Err(AddressError::MissingPort);
+        let is_ip_port = is_valid_ipv4_port(self);
+        let is_ip = is_valid_ipv4(self);
+        // subdomain.domain.com
+        // domain.com
+        // d0m41n.com
+        let is_host_name = is_valid_hostname(self);
+
+        if !is_ip_port & !is_ip & !is_host_name {
+            return Err(AddressError::InvalidAddress);
         }
 
-        let dest_ip = IPv4Address::try_from(slices[0]).map_err(|_| AddressError::InvalidAddress)?;
+        if is_ip_port {
+            let slices = self.split(":").collect::<Vec<&str>>();
 
-        // Radix is the same as the base of the number system we want to use (base 10 here)
-        let radix: u32 = 10;
+            let ip = IPv4Address::try_from(slices[0]).map_err(|_| AddressError::InvalidAddress)?;
 
-        let dest_port_digits: Vec<u32> = slices[1]
-            .chars()
-            .map(|c| c.to_digit(radix))
-            .collect::<Option<Vec<u32>>>()
-            .ok_or(AddressError::InvalidPort)?;
+            // Radix is the same as the base of the number system we want to use (base 10 here)
+            let radix: u32 = 10;
 
-        let mut dest_port = 0;
-        for d in dest_port_digits {
-            dest_port = (dest_port as u16) * 10 + (d as u16);
+            let dest_port_digits: Vec<u32> = slices[1]
+                .chars()
+                .map(|c| c.to_digit(radix))
+                .collect::<Option<Vec<u32>>>()
+                .ok_or(AddressError::InvalidPort)?;
+
+            let mut dest_port = 0;
+            for d in dest_port_digits {
+                dest_port = (dest_port as u16) * 10 + (d as u16);
+            }
+
+            return Ok(SockAddr::V4(SockAddrV4(ip, Port::Unreserved(dest_port))));
+        } else if is_ip {
+            let ip = IPv4Address::try_from(*self).map_err(|_| AddressError::InvalidAddress)?;
+
+            return Ok(SockAddr::V4(SockAddrV4(ip, Port::Unreserved(0x00))));
+        } else {
+            let ip = resolve_domain_name(self).map_err(|_| AddressError::CouldNotResolveHost)?;
+
+            let ip_v4 =
+                IPv4Address::try_from(ip.as_slice()).map_err(|_| AddressError::InvalidAddress)?;
+
+            return Ok(SockAddr::V4(SockAddrV4(ip_v4, Port::Unreserved(0x00))));
         }
-
-        let pg = PortGuard {
-            sock_fd: None,
-            port: dest_port,
-            is_tcp: is_tcp,
-        };
-
-        Ok(SockAddr::V4(SockAddrV4(dest_ip, pg)))
     }
+}
+fn is_valid_ipv4(s: &str) -> bool {
+    let mut parts = s.split('.');
+
+    for _ in 0..4 {
+        match parts.next() {
+            Some(part) => {
+                // Octect is not empty, has less than 3 chars and all chars are digits
+                if part.is_empty() || part.len() > 3 || !part.bytes().all(|b| b.is_ascii_digit()) {
+                    return false;
+                }
+                // Octet not greater than 255
+                match part.parse::<u8>() {
+                    Ok(_) => {}
+                    Err(_) => return false,
+                }
+            }
+            None => return false,
+        }
+    }
+
+    if parts.next().is_some() {
+        return false; // more than four parts
+    }
+    true
+}
+
+fn is_valid_ipv4_port(s: &str) -> bool {
+    match s.split_once(':') {
+        Some(split) => is_valid_ipv4(split.0) & split.1.parse::<u16>().is_ok(),
+        None => false,
+    }
+}
+
+fn is_valid_hostname(name: &str) -> bool {
+    let name = name.strip_suffix('.').unwrap_or(name);
+    if name.is_empty() || name.len() > 253 {
+        return false;
+    }
+    name.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    })
 }

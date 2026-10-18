@@ -3,26 +3,19 @@ pub mod socket;
 
 use libc;
 
-use std::{
-    clone,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use libc::{c_void, recv, send};
 
 use crate::{
-    net::{
-        com::{
-            PduPayload,
-            address::{
-                HardwareAddress, IPv4Address, IPv6Address, MacAddress, PortGuard, ProtocolAddress,
-                SockAddr, SockAddrV4, SockAddrV6, ToSockAddr,
-            },
-            arp, dns,
-            ethernet::Frame,
-            udp,
+    net::com::{
+        address::{
+            HardwareAddress, IPv4Address, IPv6Address, MacAddress, Port, PortGuard,
+            ProtocolAddress, SockAddr, SockAddrV4, SockAddrV6, ToSockAddr,
         },
-        socket::set_tcp_sock_timeout,
+        arp, dns,
+        ethernet::Frame,
+        udp,
     },
     os::ItfAddrs,
 };
@@ -72,7 +65,7 @@ impl ConnectionEndpoints {
         }
     }
 
-    fn get_addrs_ports(self) -> (PortGuard, PortGuard) {
+    fn get_addrs_ports(self) -> (Port, Port) {
         match self {
             ConnectionEndpoints::V4(src, dest) => (src.port(), dest.port()),
             ConnectionEndpoints::V6(src, dest) => (src.port(), dest.port()),
@@ -125,7 +118,7 @@ pub enum TcpError {
 impl TcpConnection {
     pub fn new<T: ToSockAddr>(dest_addr: T, src_port: Option<u16>) -> Result<Self, TcpError> {
         let dest_sock_addr = dest_addr
-            .to_sock_addr(true)
+            .to_sock_addr()
             .map_err(|_| TcpError::InvalidDestAddress)?;
 
         let (endpoints, target_itf) = get_conn_4_tuple(dest_sock_addr.clone(), src_port, true)
@@ -160,7 +153,7 @@ impl TcpConnection {
                     .map_err(|_| ConnectionError::GetDestMac)
                     .map_err(|_| TcpError::FailedToComputeDestMac)?;
 
-                let (src_port_guard, _) = endpoints.clone().get_addrs_ports();
+                let (src_port, _) = endpoints.clone().get_addrs_ports();
 
                 conn = Some(Self {
                     src_mac: src_mac,
@@ -171,7 +164,8 @@ impl TcpConnection {
                     ack_num: 0,
                     state: TcpState::Closed,
                     time_wait_deadline: None,
-                    src_port_guard: src_port_guard.to_owned(),
+                    src_port_guard: PortGuard::try_from(&src_port)
+                        .map_err(|_| TcpError::Placeholder)?,
                 });
             }
             SockAddr::V6(_sock_addr) => {}
@@ -244,7 +238,7 @@ impl TcpConnection {
                 let time_before_deadline = dl - now;
                 // Update socket timeout to reflect how much time is left before the TimeWait
                 // deadline is reached
-                set_tcp_sock_timeout(self.sock_fd, time_before_deadline)
+                socket::set_tcp_sock_timeout(self.sock_fd, time_before_deadline)
                     .map_err(|_| TcpError::CloseConnectionFailed)?;
             }
             let frame_size = unsafe {
@@ -287,8 +281,8 @@ impl TcpConnection {
                                 let is_from_remote = remote_ip_dgram.src_ip.addr_bytes()
                                     == self_dest_addr_bytes
                                     && remote_ip_dgram.dest_ip.addr_bytes() == self_src_addr_bytes
-                                    && remote_tcp_seg.dest_port == self_src_addr_port.port_number()
-                                    && remote_tcp_seg.src_port == self_dest_addr_port.port_number();
+                                    && remote_tcp_seg.dest_port == self_src_addr_port.number()
+                                    && remote_tcp_seg.src_port == self_dest_addr_port.number();
 
                                 if is_from_remote {
                                     // All segments after handshake are expected to contain the ACK flag and
@@ -458,8 +452,8 @@ impl TcpConnection {
                         let is_syn_from_remote = remote_ip_dgram.src_ip.addr_bytes()
                             == self_dest_addr_bytes
                             && remote_ip_dgram.dest_ip.addr_bytes() == self_src_addr_bytes
-                            && remote_tcp_seg.dest_port == self_src_addr_port.port_number()
-                            && remote_tcp_seg.src_port == self_dest_addr_port.port_number();
+                            && remote_tcp_seg.dest_port == self_src_addr_port.number()
+                            && remote_tcp_seg.src_port == self_dest_addr_port.number();
 
                         let is_ack_to_syn = remote_tcp_seg.ack_num == self.seq_num;
 
@@ -653,7 +647,7 @@ fn send_syn(
     }
 }
 
-pub fn tcp_incoming_handler(segment: tcp::Segment) {
+pub fn tcp_incoming_handler(_segment: tcp::Segment) {
 
     // Drop malformed segments or segments without ACK
 
@@ -666,11 +660,11 @@ pub fn tcp_incoming_handler(segment: tcp::Segment) {
 
 pub fn resolve_domain_name(domain_name: &str) -> Result<Vec<u8>, ConnectionError> {
     // 53 -> 0011 0101 -> 0x35
-    let dest_pg = PortGuard::new(0x35, false, false).map_err(|_| ConnectionError::GetDestPort)?;
+    let dest_port = Port::Unreserved(0x35);
 
     let dest_ip = dns::Servers::GOOGLE.get_ipv4();
 
-    let dest_sock_addr = SockAddr::V4(SockAddrV4(dest_ip, dest_pg));
+    let dest_sock_addr = SockAddr::V4(SockAddrV4(dest_ip, dest_port));
 
     let (endpoints, target_itf) =
         get_conn_4_tuple(dest_sock_addr, None, false).map_err(|_| ConnectionError::Placeholder)?;
@@ -756,15 +750,15 @@ pub fn resolve_domain_name(domain_name: &str) -> Result<Vec<u8>, ConnectionError
                     let is_from_remote = remote_ip_dgram.src_ip.addr_bytes()
                         == self_dest_addr_bytes
                         && remote_ip_dgram.dest_ip.addr_bytes() == self_src_addr_bytes
-                        && remote_udp_seg.dest_port == self_src_addr_port.port_number()
-                        && remote_udp_seg.src_port == self_dest_addr_port.port_number();
+                        && remote_udp_seg.dest_port == self_src_addr_port.number()
+                        && remote_udp_seg.src_port == self_dest_addr_port.number();
 
                     let is_reply = dns_reply.id() == dns_query.id();
 
                     if is_reply & is_from_remote {
                         for answer in dns_reply.payload.answer {
                             res.extend_from_slice(&answer.get_record_data());
-                            return Ok(res)
+                            return Ok(res);
                         }
                     }
                 }
@@ -925,9 +919,9 @@ fn get_conn_4_tuple(
 
             let port = src_port.unwrap_or(0);
             let src_port_guard =
-                PortGuard::new(port, is_tcp, true).map_err(|_| ConnectionError::GetSourcePort)?;
+                PortGuard::new(port, is_tcp).map_err(|_| ConnectionError::GetSourcePort)?;
 
-            let src_sock_addr = SockAddrV4(ipv4_addr, src_port_guard);
+            let src_sock_addr = SockAddrV4(ipv4_addr, Port::Reserved(src_port_guard));
 
             let endp = ConnectionEndpoints::V4(
                 src_sock_addr,
@@ -945,10 +939,9 @@ fn get_conn_4_tuple(
             }
 
             let dummy_addr = IPv6Address([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-            let dummy_sock_addr = SockAddrV6(
-                dummy_addr,
-                PortGuard::new(0x0011, is_tcp, true).map_err(|_| ConnectionError::GetSourcePort)?,
-            );
+            let dummy_port_guard =
+                PortGuard::new(0x0000, is_tcp).map_err(|_| ConnectionError::GetSourcePort)?;
+            let dummy_sock_addr = SockAddrV6(dummy_addr, Port::Reserved(dummy_port_guard));
 
             Ok((
                 ConnectionEndpoints::V6(dummy_sock_addr.clone(), dummy_sock_addr),
@@ -1005,10 +998,10 @@ fn compute_dest_mac_ipv4(
 }
 
 fn compute_dest_mac_ipv6(
-    sock_fd: i32,
-    src_mac: MacAddress,
-    src_ip: IPv6Address,
-    dest_ip: IPv6Address,
+    _sock_fd: i32,
+    _src_mac: MacAddress,
+    _src_ip: IPv6Address,
+    _dest_ip: IPv6Address,
 ) -> Result<MacAddress, TcpError> {
     // TODO: Implement Neighbour Discovery Protocol
     Ok(MacAddress::ZERO)
