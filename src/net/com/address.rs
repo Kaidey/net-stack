@@ -47,7 +47,7 @@ impl PortGuard {
         let (fd, port) =
             socket::new_reservation_sock(request_port).map_err(|_| PortGuardError::Placeholder)?;
 
-        let mut pg = Self {
+        let pg = Self {
             sock_fd: fd,
             port: port,
             is_tcp: is_tcp_port,
@@ -56,7 +56,6 @@ impl PortGuard {
         if is_tcp_port {
             match os::switch_iptables_kernel_rst_block(port, os::IpTableRuleAction::Insert) {
                 Ok(true) => {
-                    pg.is_tcp = true;
                     return Ok(pg);
                 }
                 _ => {
