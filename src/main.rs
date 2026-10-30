@@ -3,7 +3,7 @@
 
 // use crate::net::{com::{address::IPv4Address, ethernet, ipv4, udp}, resolve_domain_name};
 
-use crate::net::com::address::{SockAddr, ToSockAddr};
+use crate::net::com::http;
 
 mod crypto;
 mod net;
@@ -21,56 +21,9 @@ mod os;
 // HTTP Client
 
 fn main() {
-    let name = "scanme.nmap.org";
+    let name = "http://scanme.nmap.org";
 
-    let x: SockAddr = name.to_sock_addr().unwrap();
-
-    match x {
-        SockAddr::V4(addr) => println!("Ip: {} | Port: {}", addr.addr(), addr.port()),
-        SockAddr::V6(_) => {}
-    }
-    let name = "nmap.org";
-
-    let x: SockAddr = name.to_sock_addr().unwrap();
-
-    match x {
-        SockAddr::V4(addr) => println!("Ip: {} | Port: {}", addr.addr(), addr.port()),
-        SockAddr::V6(_) => {}
-    }
-
-    let name = "192.168.68.1";
-
-    let x: SockAddr = name.to_sock_addr().unwrap();
-
-    match x {
-        SockAddr::V4(addr) => println!("Ip: {} | Port: {}", addr.addr(), addr.port()),
-        SockAddr::V6(_) => {}
-    }
-
-    let name = "192.168.68.1:8080";
-
-    let x: SockAddr = name.to_sock_addr().unwrap();
-
-    match x {
-        SockAddr::V4(addr) => println!("Ip: {} | Port: {}", addr.addr(), addr.port()),
-        SockAddr::V6(_) => {}
-    }
-
-    // let res = resolve_domain_name(name).unwrap();
-    // let ip = IPv4Address::try_from(res.as_slice()).unwrap();
-
-    // println!("\nDNS Reply: {}", ip);
-
-    // let new_conn = net::TcpConnection::new("45.33.32.156:80", None).unwrap();
-    //
-    // let http_payload = "GET / HTTP/1.1\r\nHost: scanme.nmap.org\r\nConnection: close\r\n\r\n"
-    //     .to_string()
-    //     .into_bytes();
-
-    // new_conn.write(http_payload);
-    // new_conn.read();
-
-    // new_conn.close().unwrap();
+    http::Client::get(name).unwrap();
 
     // os::drop_root_privilege();
 }

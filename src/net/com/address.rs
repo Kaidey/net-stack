@@ -424,6 +424,11 @@ impl SockAddrV4 {
         self.1.clone()
     }
 }
+impl fmt::Display for SockAddrV4 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "IP: {} | Port: {}", self.addr(), self.port())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SockAddrV6(pub IPv6Address, pub Port);
@@ -435,6 +440,12 @@ impl SockAddrV6 {
 
     pub fn port(&self) -> Port {
         self.1.clone()
+    }
+}
+
+impl fmt::Display for SockAddrV6 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "IP: {} | Port: {}", self.addr(), self.port())
     }
 }
 
@@ -457,6 +468,16 @@ impl SockAddr {
             Self::V4(addr) => addr.port(),
             Self::V6(addr) => addr.port(),
         }
+    }
+}
+
+impl fmt::Display for SockAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SockAddr::V4(addr) => write!(f, "{}", addr)?,
+            SockAddr::V6(addr) => write!(f, "{}", addr)?,
+        }
+        Ok(())
     }
 }
 

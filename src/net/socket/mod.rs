@@ -58,10 +58,10 @@ fn interface_bind_packet_socket(sock_fd: i32, net_itf: CString) {
 // Reserves a port by creating a non-listening socket and binding it to the requested port
 // If requested == 0, the kernel picks an available port
 //
-// The socket needs to be closed manually if the process keeps running but it is no longer used. If
-// the process ends, the kernel closes the socket automatically. Its file descriptor also needs to
-// stay in scope for the socket to remain open and port reserved. For these reasons, the fd is also
-// returned
+// The kernel will automatically close any sockets owned by a process when it ends. However, we
+// will usually want our port - and thus the reservation port - to be reserved for as long as the
+// connection it is serving lives. To be able to close it manually, the FD needs to be kept in
+// scope, thus it is returned.
 pub fn new_reservation_sock(requested_port: u16) -> Result<(i32, u16), std::io::Error> {
     let fd = unsafe { socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0) };
     if fd < 0 {
