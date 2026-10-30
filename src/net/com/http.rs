@@ -1,4 +1,4 @@
-use crate::net::{TcpConnection, com::address::ToSockAddr};
+use crate::net::TcpConnection;
 
 const HTTP_PORT: u16 = 0x0080;
 const HTTPS_PORT: u16 = 0x01B1;
@@ -7,6 +7,8 @@ const HTTP_VERSION: &str = "1.1";
 #[derive(Debug)]
 pub enum HttpError {
     InvalidAddress,
+    TcpConnectionFailed,
+    FailedToSendRequest
 }
 
 pub struct Client;
@@ -57,7 +59,12 @@ impl Client {
 
         let request = format!("GET {} HTTP/{}\r\nHost: {}\r\n\r\n", path, HTTP_VERSION, host);
 
-        let tcp_conn = TcpConnection::new(addr.as_str(), None);
+        let mut tcp_conn = TcpConnection::new(addr.as_str(), None).map_err(|_| HttpError::TcpConnectionFailed)?;
+
+        println!("Created tcp conn");
+        std::thread::sleep(std::time::Duration::from_secs(10));
+
+        tcp_conn.send(&request.into_bytes()).map_err(|_| HttpError::FailedToSendRequest)?;
 
         Ok(())
     }

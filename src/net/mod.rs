@@ -357,6 +357,7 @@ impl TcpConnection {
                                             self.conn_endpoints.clone(),
                                             self.seq_num,
                                             self.ack_num,
+                                            None
                                         )
                                         .map_err(|_| TcpError::CloseConnectionFailed)?;
 
@@ -475,6 +476,7 @@ impl TcpConnection {
                                 self.conn_endpoints.clone(),
                                 self.seq_num,
                                 self.ack_num,
+                                None
                             );
 
                             match ack_res {
@@ -492,6 +494,27 @@ impl TcpConnection {
         }
         return Ok(());
     }
+
+    pub fn send(&mut self, data: &[u8]) -> Result<(), TcpError> {
+        let res = send_ack(
+            self.sock_fd,
+            self.src_mac,
+            self.dest_mac,
+            self.conn_endpoints.clone(),
+            self.seq_num,
+            self.ack_num,
+            Some(data),
+        );
+
+        match res {
+            Ok(_) => {
+                self.seq_num = self.seq_num.wrapping_add(data.len() as u32);
+            }
+            Err(_) => return Err(TcpError::Placeholder),
+        }
+
+        Ok(())
+    }
 }
 
 fn send_ack(
@@ -501,13 +524,21 @@ fn send_ack(
     conn_endpoints: ConnectionEndpoints,
     seq_num: u32,
     ack_num: u32,
+    data: Option<&[u8]>,
 ) -> Result<(), TcpError> {
     match conn_endpoints {
         ConnectionEndpoints::V4(src, dest) => {
             let src_generic = SockAddr::V4(src.clone());
             let dest_generic = SockAddr::V4(dest.clone());
 
-            let seg = tcp::Segment::new(src_generic, dest_generic, tcp::Flags::ACK, vec![])
+            let payload: Vec<u8>;
+
+            match data {
+                Some(d) => payload = d.to_vec(),
+                None => payload = vec![],
+            }
+
+            let seg = tcp::Segment::new(src_generic, dest_generic, tcp::Flags::ACK, payload)
                 .map_err(|_| TcpError::Placeholder)?
                 .seq(seq_num)
                 .ack(ack_num)
