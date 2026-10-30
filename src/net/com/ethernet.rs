@@ -1,13 +1,10 @@
 use crate::net::com::{PduPayload, address::MacAddress};
 use core::fmt;
 
-// #[derive(Debug, Clone, PartialEq, Eq)]
-// pub enum EtherPayload {
-//     IPv4(ipv4::IPv4Payload),
-//     // IPv6,
-//     Arp(Frame<arp::Datagram>),
-//     Unknown(Frame<UnknownPayload>),
-// }
+// 14 byte header + 46 byte minimum payload size discounting FCS which is added by the NIC
+const ETH_MIN_FRAME_LEN_NO_FCS: usize = 60;
+// 14 byte header + 1500 max payload size discounting FCS which is added by the NIC
+const ETH_MAX_FRAME_LEN_NO_FCS: usize = 1514;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameError {
@@ -51,11 +48,7 @@ pub struct Frame<P: PduPayload<CodepointType = u16>> {
 }
 
 impl<P: PduPayload<CodepointType = u16>> Frame<P> {
-    pub fn new(
-        dest_mac_address: MacAddress,
-        src_mac_address: MacAddress,
-        payload: P,
-    ) -> Self {
+    pub fn new(dest_mac_address: MacAddress, src_mac_address: MacAddress, payload: P) -> Self {
         Self {
             dest_mac_address: dest_mac_address,
             src_mac_address: src_mac_address,
@@ -79,6 +72,17 @@ impl<P: PduPayload<CodepointType = u16>> TryFrom<&Frame<P>> for Vec<u8> {
             .serialize()
             .or_else(|_| Err(FrameError::FrameBad))?;
         bytes.extend_from_slice(&serialized_payload);
+
+        if bytes.len() > ETH_MAX_FRAME_LEN_NO_FCS {
+            return Err(FrameError::FrameBad);
+        }
+
+        if bytes.len() < ETH_MIN_FRAME_LEN_NO_FCS {
+            let padding_len = ETH_MIN_FRAME_LEN_NO_FCS - bytes.len();
+            for _ in 0..padding_len {
+                bytes.push(0x00);
+            }
+        }
 
         Ok(bytes)
     }
