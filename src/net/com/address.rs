@@ -505,49 +505,46 @@ pub trait ToSockAddr {
 impl ToSockAddr for &str {
     fn to_sock_addr(&self) -> Result<SockAddr, AddressError> {
         // TODO: Handle IPv6
+        // TODO: Possibly need to handle this being used for local addresses wherein ports will need
+        // to be reserved e.g listeners
 
-        let is_ip_port = is_valid_ipv4_port(self);
-        let is_ip = is_valid_ipv4(self);
+        let port: u16;
+        let addr: &str;
+
+        match self.split_once(":") {
+            Some(split) => {
+                let p = split
+                    .1
+                    .parse::<u16>()
+                    .map_err(|_| AddressError::InvalidPort)?;
+
+                port = p;
+                addr = split.0;
+            }
+            None => return Err(AddressError::InvalidAddress),
+        }
+
+        let is_ip = is_valid_ipv4(addr);
         // subdomain.domain.com
         // domain.com
         // d0m41n.com
-        let is_host_name = is_valid_hostname(self);
+        let is_host_name = is_valid_hostname(addr);
 
-        if !is_ip_port & !is_ip & !is_host_name {
+        if !is_ip & !is_host_name {
             return Err(AddressError::InvalidAddress);
         }
 
-        if is_ip_port {
-            let slices = self.split(":").collect::<Vec<&str>>();
+        if is_ip {
+            let ip = IPv4Address::try_from(addr).map_err(|_| AddressError::InvalidAddress)?;
 
-            let ip = IPv4Address::try_from(slices[0]).map_err(|_| AddressError::InvalidAddress)?;
-
-            // Radix is the same as the base of the number system we want to use (base 10 here)
-            let radix: u32 = 10;
-
-            let dest_port_digits: Vec<u32> = slices[1]
-                .chars()
-                .map(|c| c.to_digit(radix))
-                .collect::<Option<Vec<u32>>>()
-                .ok_or(AddressError::InvalidPort)?;
-
-            let mut dest_port = 0;
-            for d in dest_port_digits {
-                dest_port = (dest_port as u16) * 10 + (d as u16);
-            }
-
-            return Ok(SockAddr::V4(SockAddrV4(ip, Port::Unreserved(dest_port))));
-        } else if is_ip {
-            let ip = IPv4Address::try_from(*self).map_err(|_| AddressError::InvalidAddress)?;
-
-            return Ok(SockAddr::V4(SockAddrV4(ip, Port::Unreserved(0x00))));
+            return Ok(SockAddr::V4(SockAddrV4(ip, Port::Unreserved(port))));
         } else {
-            let ip = resolve_domain_name(self).map_err(|_| AddressError::CouldNotResolveHost)?;
+            let ip = resolve_domain_name(addr).map_err(|_| AddressError::CouldNotResolveHost)?;
 
             let ip_v4 =
                 IPv4Address::try_from(ip.as_slice()).map_err(|_| AddressError::InvalidAddress)?;
 
-            return Ok(SockAddr::V4(SockAddrV4(ip_v4, Port::Unreserved(0x00))));
+            return Ok(SockAddr::V4(SockAddrV4(ip_v4, Port::Unreserved(port))));
         }
     }
 }
@@ -575,13 +572,6 @@ fn is_valid_ipv4(s: &str) -> bool {
         return false; // more than four parts
     }
     true
-}
-
-fn is_valid_ipv4_port(s: &str) -> bool {
-    match s.split_once(':') {
-        Some(split) => is_valid_ipv4(split.0) & split.1.parse::<u16>().is_ok(),
-        None => false,
-    }
 }
 
 fn is_valid_hostname(name: &str) -> bool {
