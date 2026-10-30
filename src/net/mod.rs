@@ -10,8 +10,8 @@ use libc::{c_void, recv, send};
 use crate::{
     net::com::{
         address::{
-            HardwareAddress, IPv4Address, IPv6Address, MacAddress, PortGuard,
-            ProtocolAddress, SockAddr, SockAddrV4, SockAddrV6, ToSockAddr,
+            HardwareAddress, IPv4Address, IPv6Address, MacAddress, PortGuard, ProtocolAddress,
+            SockAddr, SockAddrV4, SockAddrV6, ToSockAddr,
         },
         arp, dns,
         ethernet::Frame,
@@ -121,8 +121,9 @@ impl TcpConnection {
             .to_sock_addr()
             .map_err(|_| TcpError::InvalidDestAddress)?;
 
-        let (endpoints, target_itf, src_port_guard) = get_conn_4_tuple(dest_sock_addr.clone(), src_port, true)
-            .map_err(|_| TcpError::FailedToComputeConnEndpoints)?;
+        let (endpoints, target_itf, src_port_guard) =
+            get_conn_4_tuple(dest_sock_addr.clone(), src_port, true)
+                .map_err(|_| TcpError::FailedToComputeConnEndpoints)?;
 
         let itf_name = target_itf.get_itf_name();
 
@@ -162,7 +163,7 @@ impl TcpConnection {
                     ack_num: 0,
                     state: TcpState::Closed,
                     time_wait_deadline: None,
-                    src_port_guard: src_port_guard 
+                    src_port_guard: src_port_guard,
                 });
             }
             SockAddr::V6(_sock_addr) => {}
@@ -354,7 +355,7 @@ impl TcpConnection {
                                             self.conn_endpoints.clone(),
                                             self.seq_num,
                                             self.ack_num,
-                                            None
+                                            None,
                                         )
                                         .map_err(|_| TcpError::CloseConnectionFailed)?;
 
@@ -473,7 +474,7 @@ impl TcpConnection {
                                 self.conn_endpoints.clone(),
                                 self.seq_num,
                                 self.ack_num,
-                                None
+                                None,
                             );
 
                             match ack_res {
@@ -511,6 +512,73 @@ impl TcpConnection {
         }
 
         Ok(())
+    }
+
+    pub fn receive(&mut self) -> Result<Vec<u8>, TcpError> {
+        let mut buffer = [0u8; 65536];
+
+        let frame_size = unsafe {
+            recv(
+                self.sock_fd,
+                buffer.as_mut_ptr() as *mut c_void,
+                buffer.len(),
+                0,
+            )
+        };
+
+        if frame_size < 0 {
+            return Err(TcpError::Handshake);
+        }
+
+        let eth_type = u16::from_be_bytes([buffer[12], buffer[13]]);
+        // Ethernet frame has 14 bytes of header. Next proto field is byte 10 (9 index) of an IPv4
+        // header
+        let next_proto_cp = buffer[14 + 9];
+
+        match eth_type {
+            ipv4::CODEPOINT => match next_proto_cp {
+                tcp::CODEPOINT => {
+                    let frame = ethernet::Frame::<ipv4::Datagram<tcp::Segment>>::try_from(
+                        &buffer[..frame_size as usize],
+                    )
+                    .map_err(|_| TcpError::Handshake)?;
+
+                    let remote_ip_dgram: &ipv4::Datagram<tcp::Segment> = &frame.payload;
+                    let remote_tcp_seg: &tcp::Segment = &remote_ip_dgram.payload;
+
+                    let (self_src_addr_bytes, self_dest_addr_bytes) =
+                        self.conn_endpoints.clone().get_addrs_bytes();
+
+                    let (self_src_addr_port, self_dest_addr_port) =
+                        self.conn_endpoints.clone().get_addrs_ports();
+
+                    let is_from_peer = remote_ip_dgram.src_ip.addr_bytes()
+                        == self_dest_addr_bytes
+                        && remote_ip_dgram.dest_ip.addr_bytes() == self_src_addr_bytes
+                        && remote_tcp_seg.dest_port == self_src_addr_port
+                        && remote_tcp_seg.src_port == self_dest_addr_port;
+
+                    let is_expected = remote_tcp_seg.ack_num == self.seq_num;
+
+                    if is_from_peer {
+                        if is_expected == false {
+                            return Err(TcpError::Placeholder);
+                        }
+
+                        println!("Ip:\n{}", remote_ip_dgram);
+
+                        let new_ack = remote_tcp_seg.seq_num.wrapping_add(1);
+
+                        self.ack_num = new_ack;
+
+                        return Ok(remote_tcp_seg.payload.to_vec())
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        Ok(vec![])
     }
 }
 
@@ -971,7 +1039,7 @@ fn get_conn_4_tuple(
             Ok((
                 ConnectionEndpoints::V6(dummy_sock_addr.clone(), dummy_sock_addr),
                 itf_addrs,
-                dummy_port_guard
+                dummy_port_guard,
             ))
 
             // let ipv6_addr = IPv6Address::try_from(addr.unwrap().as_slice())

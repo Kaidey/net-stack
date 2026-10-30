@@ -8,7 +8,8 @@ const HTTP_VERSION: &str = "1.1";
 pub enum HttpError {
     InvalidAddress,
     TcpConnectionFailed,
-    FailedToSendRequest
+    FailedToSendRequest,
+    FailedToGetResponse,
 }
 
 pub struct Client;
@@ -49,22 +50,61 @@ impl Client {
                 path = s.1;
                 host = s.0;
             }
-            None => {
-                path = "/";
-                host = url;
-            }
+            None => match url.split_once("?") {
+                Some(s) => {
+                    path = s.1;
+                    host = s.0;
+                }
+                None => {
+                    path = "";
+                    host = url;
+                }
+            },
         }
-
         let addr = String::from(host) + ":" + port;
 
-        let request = format!("GET {} HTTP/{}\r\nHost: {}\r\n\r\n", path, HTTP_VERSION, host);
+        let request = format!(
+            "GET /{} HTTP/{}\r\nHost: {}\r\n\r\n",
+            url_encode(path), HTTP_VERSION, host
+        );
 
-        let mut tcp_conn = TcpConnection::new(addr.as_str(), None).map_err(|_| HttpError::TcpConnectionFailed)?;
+        let mut tcp_conn =
+            TcpConnection::new(addr.as_str(), None).map_err(|_| HttpError::TcpConnectionFailed)?;
 
-        tcp_conn.send(&request.into_bytes()).map_err(|_| HttpError::FailedToSendRequest)?;
+        tcp_conn
+            .send(&request.into_bytes())
+            .map_err(|_| HttpError::FailedToSendRequest)?;
+
+        let resp = tcp_conn
+            .receive()
+            .map_err(|_| HttpError::FailedToGetResponse)?;
+
+        println!("{:?}", resp);
+
+        // TODO:
+        //    Handle responses (remote FIN if connection: close in the request, HTTP response)
+        //    Handle error codes
+        //    JSON Parser
+        //    Handle fragmentation or chunking (investigate)
 
         Ok(())
     }
     pub fn post() {}
     pub fn listen() {}
+}
+
+//sub.domain.com/api?q=one value&b=café
+//becomes
+//sub.domain.com/api?q=one%20value&b=caf%C3%A9
+fn url_encode(s: &str) -> String {
+    let mut encoded = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(b as char)
+            }
+            _ => encoded.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    encoded
 }
