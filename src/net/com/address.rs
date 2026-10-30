@@ -2,39 +2,16 @@ use crate::net::{resolve_domain_name, socket};
 use crate::os;
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Port {
-    Reserved(PortGuard),
-    Unreserved(u16),
-}
-
-impl Port {
-    pub fn number(&self) -> u16 {
-        match self {
-            Self::Reserved(port_guard) => port_guard.port,
-            Self::Unreserved(port) => port.to_owned(),
-        }
-    }
-}
-
-impl fmt::Display for Port {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unreserved(port) => write!(f, "{}", port)?,
-            Self::Reserved(pg) => write!(f, "{}", pg.port_number())?,
-        }
-        Ok(())
-    }
-}
-
 pub enum PortGuardError {
     Placeholder,
 }
 
-// Holds the fd of a reservation socket and the reserved port number
-// The socket needs to remain in scope for the port it was assigned to stay reserved for our process.
-// Reservation sockets allow us to either request a free port from the kernel or guarantee that a
-// client provided port is free
+// Holds the fd of a reservation socket and the reserved port number for manual closure of the
+// socket and removal of the iptables rules defined for the port when the owner connection ends
+//
+// Should have only 1 owner (a connection) at all times to prevent multiple occurrences of the 
+// Drop behaviour on the same socket. Thus, it is not part of the SockAddrV4 or SockAddrV5 
+// structs, which hold only a port number
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortGuard {
     pub sock_fd: i32,
@@ -75,16 +52,6 @@ impl PortGuard {
     }
 }
 
-impl TryFrom<&Port> for PortGuard {
-    type Error = PortGuardError;
-    fn try_from(value: &Port) -> Result<Self, Self::Error> {
-        match value {
-            Port::Reserved(pg) => Ok(pg.clone()),
-            Port::Unreserved(_) => Err(PortGuardError::Placeholder),
-        }
-    }
-}
-// Implements behaviour for when a value is dropped (goes out of scope)
 // E.g: if an object holding a PortGuard type is dropped
 impl Drop for PortGuard {
     fn drop(&mut self) {
@@ -413,15 +380,15 @@ impl fmt::Display for IPv6Address {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SockAddrV4(pub IPv4Address, pub Port);
+pub struct SockAddrV4(pub IPv4Address, pub u16);
 
 impl SockAddrV4 {
     pub fn addr(&self) -> IPv4Address {
         self.0
     }
 
-    pub fn port(&self) -> Port {
-        self.1.clone()
+    pub fn port(&self) -> u16 {
+        self.1
     }
 }
 impl fmt::Display for SockAddrV4 {
@@ -431,15 +398,15 @@ impl fmt::Display for SockAddrV4 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SockAddrV6(pub IPv6Address, pub Port);
+pub struct SockAddrV6(pub IPv6Address, pub u16);
 
 impl SockAddrV6 {
     pub fn addr(&self) -> IPv6Address {
         self.0
     }
 
-    pub fn port(&self) -> Port {
-        self.1.clone()
+    pub fn port(&self) -> u16 {
+        self.1
     }
 }
 
@@ -463,10 +430,10 @@ impl SockAddr {
         }
     }
 
-    pub fn port(&self) -> Port {
+    pub fn port(&self) -> u16 {
         match self {
-            Self::V4(addr) => addr.port(),
-            Self::V6(addr) => addr.port(),
+            Self::V4(sock_addr) => sock_addr.port(),
+            Self::V6(sock_addr) => sock_addr.port(),
         }
     }
 }
@@ -558,14 +525,14 @@ impl ToSockAddr for &str {
         if is_ip {
             let ip = IPv4Address::try_from(addr).map_err(|_| AddressError::InvalidAddress)?;
 
-            return Ok(SockAddr::V4(SockAddrV4(ip, Port::Unreserved(port))));
+            return Ok(SockAddr::V4(SockAddrV4(ip, port)));
         } else {
             let ip = resolve_domain_name(addr).map_err(|_| AddressError::CouldNotResolveHost)?;
 
             let ip_v4 =
                 IPv4Address::try_from(ip.as_slice()).map_err(|_| AddressError::InvalidAddress)?;
 
-            return Ok(SockAddr::V4(SockAddrV4(ip_v4, Port::Unreserved(port))));
+            return Ok(SockAddr::V4(SockAddrV4(ip_v4, port)));
         }
     }
 }

@@ -24,8 +24,8 @@ impl Segment {
         payload: Vec<u8>,
     ) -> Result<Self, SegmentError> {
         Ok(Self {
-            src_port: src_sock_addr.port().number(),
-            dest_port: dest_sock_addr.port().number(),
+            src_port: src_sock_addr.port(),
+            dest_port: dest_sock_addr.port(),
             // UDP Header as no variable-size fields, it's always 8 bytes
             len: 8 + payload.len() as u16,
             checksum: 0,

@@ -5,6 +5,9 @@
 // DNS server cache check
 // DNS lookup
 
+// 53 -> 0011 0101 -> 0x35
+pub const PORT: u16 = 0x35;
+
 use std::fmt;
 
 use crate::net::com::address::IPv4Address;

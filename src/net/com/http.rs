@@ -50,7 +50,7 @@ impl Client {
                 host = s.0;
             }
             None => {
-                path = "";
+                path = "/";
                 host = url;
             }
         }
@@ -60,9 +60,6 @@ impl Client {
         let request = format!("GET {} HTTP/{}\r\nHost: {}\r\n\r\n", path, HTTP_VERSION, host);
 
         let mut tcp_conn = TcpConnection::new(addr.as_str(), None).map_err(|_| HttpError::TcpConnectionFailed)?;
-
-        println!("Created tcp conn");
-        std::thread::sleep(std::time::Duration::from_secs(10));
 
         tcp_conn.send(&request.into_bytes()).map_err(|_| HttpError::FailedToSendRequest)?;
 
